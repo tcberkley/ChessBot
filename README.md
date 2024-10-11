@@ -15,10 +15,17 @@ chess_game.ipynb -
   
 
 Bot Descriptions:
-    Random Bot - Makes a random move every turn
-    mini_max_v1 - Uses mini max algo to find best position based on only material
-    mini_max_v2 - Uses mini max algo to find best position based on material and position of knights and pawns, but does so incorrectly
-    alpha_beta_mm_v3 - Uses alpha/beta pruning to speed up algo. Incentivizes good positioning for queen and bishop
-    endgame_faster_v4 - Searches deeper in the endgame, optimizes get_adj_material algo
-    castle_bot_v5 - rewards abaility to castle (1 point per side), rewards castling more (5 points)
-    king_safety_v6 - rewards king safety, removes castling incentive, fixes material evaluation error
+
+Random Bot - Makes a random move every turn
+
+mini_max_v1 - Uses mini max algo to find best position based on only material
+
+mini_max_v2 - Uses mini max algo to find best position based on material and position of knights and pawns, but does so incorrectly
+
+alpha_beta_mm_v3 - Uses alpha/beta pruning to speed up algo. Incentivizes good positioning for queen and bishop
+
+endgame_faster_v4 - Searches deeper in the endgame, optimizes get_adj_material algo
+
+castle_bot_v5 - rewards abaility to castle (1 point per side), rewards castling more (5 points)
+
+king_safety_v6 - rewards king safety, removes castling incentive, fixes material evaluation error
