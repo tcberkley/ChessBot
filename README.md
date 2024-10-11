@@ -10,7 +10,7 @@ The "personality" of the bot stems from the evaluation function, which I came up
 
 chess_game.ipynb - 
   File where user can play against the chess bot of choosing. This defaults to king_safety_v6, the strongest bot.
-  However the bot can be chosen by changing "bot_move = king_safety_v6.get_best_move(board,depth=5)" into, for example,
+  However the bot can be chosen by changing the line in the second cell: "bot_move = king_safety_v6.get_best_move(board,depth=5)" into, for example,
   "bot_move = castle_bot_v5.get_best_move(board,depth=5)".
   
 
