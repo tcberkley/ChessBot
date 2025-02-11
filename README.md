@@ -1,8 +1,12 @@
+Project Description:
+
 This was a project that I decided to build in a couple of days to touch up on my python before I started working. 
 
 The bot uses the mini max algorithm to navigate decision trees and an evaluation function that returns the "score" of a position (node on the decision tree).
 On top of that, I implemented some "pruning techniques" that speed up the search for the best move. 
 Pruning generally prevents the bot from examining parts of the decision tree where a "bad move" (ex. unnecessarily sacrificing the queen) had taken place.
+
+How to play:
 
 chess_game.ipynb - 
   File where user can play against the chess bot of choosing. This defaults to king_safety_v6, the strongest bot.
