@@ -6,12 +6,14 @@ The bot uses the mini max algorithm to navigate decision trees and an evaluation
 On top of that, I implemented some "pruning techniques" that speed up the search for the best move. 
 Pruning generally prevents the bot from examining parts of the decision tree where a "bad move" (ex. unnecessarily sacrificing the queen) had taken place.
 
+
 How to play:
 
 chess_game.ipynb - 
   File where user can play against the chess bot of choosing. This defaults to king_safety_v6, the strongest bot.
   However the bot can be chosen by changing the line in the second cell: "bot_move = king_safety_v6.get_best_move(board,depth=5)" into, for example,
   "bot_move = castle_bot_v5.get_best_move(board,depth=5)".
+
   
 
 Bot Descriptions:
