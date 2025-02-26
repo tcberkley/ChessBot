@@ -13,6 +13,19 @@ chess_game.ipynb -
   File where user can play against the chess bot of choosing. This defaults to king_safety_v6, the strongest bot.
   However the bot can be chosen by changing the line in the second cell: "bot_move = king_safety_v6.get_best_move(board,depth=5)" into, for example,
   "bot_move = castle_bot_v5.get_best_move(board,depth=5)".
+
+-----------
+Dependencies:
+- Python 3.x
+- `python-chess` (`chess`)
+  - Install using `pip install python-chess`
+- `svgwrite` (for generating SVGs)
+  - Install using `pip install svgwrite`
+- `IPython` (for displaying SVGs in Jupyter notebooks)
+  - Install using `pip install ipython`
+- `random` (standard Python library)
+- `time` (standard Python library)
+- All notebook files from this repository
   
 -----------------
 Bot Descriptions:
