@@ -12,6 +12,7 @@ _search_time_budget = None
 _search_aborted = False
 _node_count = 0
 _TIME_CHECK_INTERVAL = 2048  # check time every N nodes
+_time_check_counter = _TIME_CHECK_INTERVAL
 
 # ─── Piece values as tuple (index by piece_type: 1=PAWN..6=KING) ───
 PIECE_VALUES = (0, 1, 3, 3, 5, 9, 0)
@@ -191,10 +192,11 @@ TOTAL_PHASE = 24
 _PHASE_WEIGHTS = (0, 0, 1, 1, 2, 4, 0)  # index by piece_type
 
 def get_game_phase(board):
-    phase = 0
-    for pt in range(2, 6):  # KNIGHT=2, BISHOP=3, ROOK=4, QUEEN=5
-        phase += len(board.pieces(pt, True)) * _PHASE_WEIGHTS[pt]
-        phase += len(board.pieces(pt, False)) * _PHASE_WEIGHTS[pt]
+    pieces = board.pieces
+    phase = ((len(pieces(2, True)) + len(pieces(2, False))) * 1 +  # knights
+             (len(pieces(3, True)) + len(pieces(3, False))) * 1 +  # bishops
+             (len(pieces(4, True)) + len(pieces(4, False))) * 2 +  # rooks
+             (len(pieces(5, True)) + len(pieces(5, False))) * 4)   # queens
     return min(phase, TOTAL_PHASE) / TOTAL_PHASE
 
 # ─── Transposition table ───
@@ -258,27 +260,26 @@ def order_moves(board, legal_moves, depth=0, tt_move=None):
     quiet = []
     depth_killers = killer_moves.get(depth, [])
     color = board.turn
+    piece_at = board.piece_at
     for move in legal_moves:
         if tt_move is not None and move == tt_move:
             tt_list.append(move)
         elif board.is_capture(move):
-            captures.append(move)
+            # Inline MVV-LVA: compute score during categorization
+            victim = piece_at(move.to_square)
+            if victim is None:
+                score = 1.0  # en passant
+            else:
+                attacker = piece_at(move.from_square)
+                score = PIECE_VALUES[victim.piece_type] - (PIECE_VALUES[attacker.piece_type] / 10.0 if attacker else 0)
+            captures.append((score, len(captures), move))
         elif move in depth_killers:
             killers.append(move)
         else:
             quiet.append(move)
-    captures.sort(key=lambda m: mvv_lva_score(board, m), reverse=True)
+    captures.sort(reverse=True)
     quiet.sort(key=lambda m: get_history_score(m, color), reverse=True)
-    return tt_list + captures + killers + quiet
-
-# ─── Passed pawn check (bitboard) ───
-
-def is_passed_pawn(board, square, color):
-    enemy_pawns = int(board.pieces(chess.PAWN, not color))
-    if color:
-        return (enemy_pawns & PASSED_MASKS_WHITE[square]) == 0
-    else:
-        return (enemy_pawns & PASSED_MASKS_BLACK[square]) == 0
+    return tt_list + [m for _, _, m in captures] + killers + quiet
 
 # ─── King safety ───
 
@@ -318,6 +319,11 @@ def get_adj_material(board, color, phase):
     pst_eg_color = PST_EG[color]
     phase_inv = 1.0 - phase
 
+    # Cache enemy pawn bitboard for passed pawn checks (avoids re-fetching per pawn)
+    enemy_pawns_bb = int(board.pieces(chess.PAWN, not color))
+    passed_masks = PASSED_MASKS_WHITE if color else PASSED_MASKS_BLACK
+    passed_bonus = 1.0 if end_game else 0.5
+
     for pt in chess.PIECE_TYPES:
         pst_mg_pt = pst_mg_color[pt]
         pst_eg_pt = pst_eg_color[pt]
@@ -330,15 +336,15 @@ def get_adj_material(board, color, phase):
                 pf = sq & 7
                 pawn_files.append(pf)
                 pawn_file_set.add(pf)
-                if is_passed_pawn(board, sq, color):
+                if (enemy_pawns_bb & passed_masks[sq]) == 0:
                     rank = sq >> 3
                     advancement = rank if color else (7 - rank)
-                    material += (1.0 if end_game else 0.5) * (advancement / 6.0)
+                    material += passed_bonus * (advancement / 6.0)
             elif pt == chess.BISHOP:
                 bishop_count += 1
-                material += 0.2 * (len(board.attacks(sq)) ** 0.5)
+                material += 0.2 * (bin(board.attacks_mask(sq)).count('1') ** 0.5)
             elif pt == chess.ROOK or pt == chess.QUEEN:
-                material += 0.2 * (len(board.attacks(sq)) ** 0.5)
+                material += 0.2 * (bin(board.attacks_mask(sq)).count('1') ** 0.5)
 
     if bishop_count >= 2:
         material += 0.3
@@ -389,15 +395,18 @@ def evaluate(board, phase):
 INF = 100000.0
 
 def quiescence(board, alpha, beta, phase, depth=0):
-    global _node_count, _search_aborted
+    global _node_count, _search_aborted, _time_check_counter
     _node_count += 1
 
     if _search_aborted:
         return 0
-    if _search_time_budget is not None and _node_count % _TIME_CHECK_INTERVAL == 0:
-        if time.time() - _search_start_time > _search_time_budget * 0.8:
-            _search_aborted = True
-            return 0
+    _time_check_counter -= 1
+    if _time_check_counter <= 0:
+        _time_check_counter = _TIME_CHECK_INTERVAL
+        if _search_time_budget is not None:
+            if time.time() - _search_start_time > _search_time_budget * 0.8:
+                _search_aborted = True
+                return 0
 
     stand_pat = evaluate(board, phase)
 
@@ -413,14 +422,21 @@ def quiescence(board, alpha, beta, phase, depth=0):
     if stand_pat + 9 < alpha:
         return alpha
 
-    # collect and sort captures/promotions by MVV-LVA
+    # collect and sort captures/promotions by MVV-LVA (inlined)
     capture_moves = []
+    piece_at = board.piece_at
     for move in board.legal_moves:
         if board.is_capture(move) or move.promotion:
-            capture_moves.append(move)
-    capture_moves.sort(key=lambda m: mvv_lva_score(board, m), reverse=True)
+            victim = piece_at(move.to_square)
+            if victim is None:
+                score = 1.0
+            else:
+                attacker = piece_at(move.from_square)
+                score = PIECE_VALUES[victim.piece_type] - (PIECE_VALUES[attacker.piece_type] / 10.0 if attacker else 0)
+            capture_moves.append((score, len(capture_moves), move))
+    capture_moves.sort(reverse=True)
 
-    for move in capture_moves:
+    for _, _, move in capture_moves:
         board.push(move)
         score = -quiescence(board, -beta, -alpha, phase, depth - 1)
         board.pop()
@@ -440,17 +456,28 @@ def quiescence(board, alpha, beta, phase, depth=0):
 # Futility pruning margins indexed by depth (0 unused, 1=1 pawn, 2=minor piece)
 _FUTILITY_MARGINS = (0, 1.5, 3.5)
 
+# Pre-computed LMR reduction table: _LMR_TABLE[depth][move_idx]
+_LMR_TABLE = [[0] * 64 for _ in range(64)]
+for _d in range(1, 64):
+    for _m in range(1, 64):
+        _LMR_TABLE[_d][_m] = int(1 + math.log(_d) * math.log(_m) / 2.5)
+
 MAX_PLY = 40
 
 def negamax(board, depth, alpha, beta, phase, null_ok=True, ply=0):
-    global _node_count, _search_aborted
+    global _node_count, _search_aborted, _time_check_counter
     _node_count += 1
 
-    # periodic time check inside the search tree
-    if _search_time_budget is not None and _node_count % _TIME_CHECK_INTERVAL == 0:
-        if time.time() - _search_start_time > _search_time_budget * 0.8:
-            _search_aborted = True
-            return 0
+    # periodic time check inside the search tree (decrementing counter avoids modulo)
+    _time_check_counter -= 1
+    if _time_check_counter <= 0:
+        _time_check_counter = _TIME_CHECK_INTERVAL
+        if _search_time_budget is not None:
+            elapsed = time.time() - _search_start_time
+            if elapsed > _search_time_budget * 0.8:
+                _search_aborted = True
+                logger.debug(f"v12 ABORT in negamax: {elapsed:.2f}s > {_search_time_budget*0.8:.2f}s")
+                return 0
 
     if _search_aborted:
         return 0
@@ -464,10 +491,6 @@ def negamax(board, depth, alpha, beta, phase, null_ok=True, ply=0):
     # check extension — must happen BEFORE depth-0 check
     # so we don't drop into quiescence while in check
     if in_check and ply < MAX_PLY - 5:
-        depth += 1
-
-    # endgame depth extension at root
-    if phase < 0.3 and ply == 0:
         depth += 1
 
     if depth <= 0 or ply >= MAX_PLY:
@@ -539,10 +562,10 @@ def negamax(board, depth, alpha, beta, phase, null_ok=True, ply=0):
 
         board.push(move)
 
-        # LMR: log-based reduction for late quiet moves
+        # LMR: log-based reduction for late quiet moves (pre-computed table)
         reduction = 0
         if move_idx >= 3 and depth >= 3 and not in_check and not is_capture and not gives_check:
-            reduction = int(1 + math.log(depth) * math.log(move_idx) / 2.5)
+            reduction = _LMR_TABLE[depth][move_idx] if move_idx < 64 else _LMR_TABLE[depth][63]
             reduction = min(reduction, depth - 2)  # don't reduce into negative depth
 
         # PVS
@@ -631,7 +654,7 @@ def get_best_move(board, depth=None, time_budget=None):
             move = random.choice([chess.Move.from_uci("e2e4"), chess.Move.from_uci("d2d4")])
             if move in board.legal_moves:
                 return move
-        else:
+        elif board.move_stack:
             last_move = board.peek()
             if last_move == chess.Move.from_uci("e2e4"):
                 move = chess.Move.from_uci("e7e5")
@@ -643,7 +666,7 @@ def get_best_move(board, depth=None, time_budget=None):
                     return move
 
     # determine search mode
-    global _search_start_time, _search_time_budget, _search_aborted, _node_count
+    global _search_start_time, _search_time_budget, _search_aborted, _node_count, _time_check_counter
     use_time = time_budget is not None
     if not use_time and depth is None:
         depth = 7
@@ -658,6 +681,7 @@ def get_best_move(board, depth=None, time_budget=None):
     _search_time_budget = time_budget if use_time else None
     _search_aborted = False
     _node_count = 0
+    _time_check_counter = _TIME_CHECK_INTERVAL
     completed_depth = 0
 
     side = "W" if board.turn else "B"
@@ -666,10 +690,20 @@ def get_best_move(board, depth=None, time_budget=None):
     logger.info(f"v12 START {side} m{board.fullmove_number} {mode} ph={phase:.2f} moves={n_legal} TT={len(transposition_table)}")
     logger.debug(f"v12 FEN: {board.fen()}")
 
+    # minimum guaranteed depth scales with budget: depth 3 for <2s, 4 for <5s, 5 otherwise
+    if use_time:
+        if time_budget < 2.0:
+            min_depth = 3
+        elif time_budget < 5.0:
+            min_depth = 4
+        else:
+            min_depth = 5
+    else:
+        min_depth = max_depth  # fixed depth mode: no early stop
+
     for current_depth in range(1, max_depth + 1):
         # time check: don't start a new depth if we've used 40%+ of budget
-        # but always search to at least depth 5 (minimum quality)
-        if use_time and current_depth > 5:
+        if use_time and current_depth > min_depth:
             elapsed = time.time() - start_time
             if elapsed > time_budget * 0.4:
                 logger.info(f"v12 STOP {elapsed:.2f}s/{time_budget:.1f}s before d{current_depth}")
@@ -683,7 +717,8 @@ def get_best_move(board, depth=None, time_budget=None):
             alpha = prev_score - ASPIRATION_DELTA
             beta = prev_score + ASPIRATION_DELTA
 
-        # root search
+        # root search — endgame extension: search 1 ply deeper when few pieces remain
+        search_depth = current_depth + 1 if phase < 0.3 else current_depth
         current_best_move = None
         best_value = -INF
 
@@ -699,11 +734,11 @@ def get_best_move(board, depth=None, time_budget=None):
 
             # PVS at root: full window for first move, null window for rest
             if move_idx == 0:
-                score = -negamax(board, current_depth - 1, -beta, -alpha, phase, True, 1)
+                score = -negamax(board, search_depth - 1, -beta, -alpha, phase, True, 1)
             else:
-                score = -negamax(board, current_depth - 1, -alpha - 1, -alpha, phase, True, 1)
+                score = -negamax(board, search_depth - 1, -alpha - 1, -alpha, phase, True, 1)
                 if not _search_aborted and score > alpha and score < beta:
-                    score = -negamax(board, current_depth - 1, -beta, -alpha, phase, True, 1)
+                    score = -negamax(board, search_depth - 1, -beta, -alpha, phase, True, 1)
             board.pop()
 
             if _search_aborted:
@@ -744,7 +779,7 @@ def get_best_move(board, depth=None, time_budget=None):
                 if board.is_checkmate():
                     board.pop()
                     return move
-                score = -negamax(board, current_depth - 1, -beta, -alpha, phase, True, 1)
+                score = -negamax(board, search_depth - 1, -beta, -alpha, phase, True, 1)
                 board.pop()
 
                 if _search_aborted:
