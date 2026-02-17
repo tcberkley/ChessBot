@@ -1,0 +1,28 @@
+# Secrets
+.env
+api_token.txt
+
+# Python
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+venv/
+
+# C build artifacts
+c_rewrite/v13_engine
+*.o
+
+# macOS
+.DS_Store
+
+# Data
+data/
+
+# IDE
+.vscode/
+.claude/
+
+# Lichess bot logs & runtime
+lichess-bot-master/lichess_bot_auto_logs/
+lichess-bot-master/venv/
+*.log

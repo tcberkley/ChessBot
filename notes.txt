@@ -1,0 +1,83 @@
+Bot Description:
+    Random Bot - Makes a random move every turn
+    
+    mini_max_v1 - Uses mini max algo to find best position based on only material
+    
+    mini_max_v2 - Uses mini max algo to find best position based on material and position of knights and pawns, but does so incorrectly
+    
+    alpha_beta_mm_v3 - Uses alpha/beta pruning to speed up algo. Incentivizes good positioning for queen and bishop
+    
+    endgame_faster_v4 - Searches deeper in the endgame, optimizes get_adj_material algo
+    
+    castle_bot_v5 - rewards abaility to castle (1 point per side), rewards castling more (5 points)
+    
+    king_safety_v6 - rewards king safety, removes castling incentive, fixes material evaluation error
+
+    quiescence_v7 - adds quiescence search, transposition table, repetition penalty, passed pawns, rook mobility, fixes castling bug from v6
+
+    opening_book_v8 - plays e4/d4 as White and e5/d5 as Black on move 1, adds killer move heuristic,
+                      null move pruning, check extensions, pawn structure penalties (doubled/isolated),
+                      bishop pair bonus, transposition table size limit
+
+    iterative_v9 - adds iterative deepening, late move reductions (LMR), full piece-square tables
+                   for all pieces (with middlegame/endgame tapering for pawns and kings), king
+                   centralization and proximity bonus in endgame, tapered evaluation using game phase
+
+    optimized_v10 - major efficiency overhaul (~38x faster than v9). Negamax rewrite (eliminates
+                    duplicated White/Black branches), TT stores best move for move ordering,
+                    principal variation search (PVS), aspiration windows, flattened 1D PST tables,
+                    bitboard passed pawn detection, history heuristic, MVV-LVA capture ordering,
+                    LMR bug fix (capture check before push), optimized eval using board.pieces()
+
+    time_managed_v11 - adds time-managed iterative deepening on top of v10. Dynamically allocates
+                       time per move based on clock/increment/move number. Searches deeper when
+                       more time is available, shallower in time pressure. Global time abort inside
+                       negamax (checks every 2048 nodes) prevents overspending on a single move.
+                       Minimum search depth of 5 ensures move quality.
+
+    v12 - search efficiency improvements on top of v11. Futility pruning (skip quiet
+                       moves at depth 1-2 when static eval + margin < alpha), quiescence move
+                       ordering (MVV-LVA on captures), removed expensive board.is_game_over()
+                       (detect checkmate/stalemate from empty legal moves), aspiration time guard
+                       (skip re-search if >50% budget used), log-based LMR (bigger reductions for
+                       later moves), lazy gives_check (only compute for LMR-eligible moves),
+                       set-based isolated pawn detection. ~25% fewer nodes at same depth.
+                       Deployed on Lichess via lichess-bot-master (account: tombot1234)
+
+    v13 - full C rewrite of v12. Uses BBC (Bit Board Chess) by Code Monkey King as the
+                       foundation for magic bitboard move generation, with v12's evaluation and
+                       search logic ported on top. Speaks UCI protocol instead of homemade.
+                       ~20x faster than v12 on PyPy (~1.3M nodes/sec), reaching depth 16 in
+                       blitz time controls (v12 maxed at depth 10-11). All v12 features ported:
+                       tapered eval, PSTs, passed pawns, mobility, pawn structure, bishop pair,
+                       king safety, castling bonuses, king endgame, negamax with PVS, null move
+                       pruning, LMR, futility pruning, aspiration windows, TT with best_move,
+                       opening book, time management. Added distance-to-mate scoring.
+                       Source: c_rewrite/v13_engine.c (~3900 lines)
+                       Binary: c_rewrite/v13_engine (compiled with gcc -O3)
+
+Lichess Bot Setup:
+    - Account: tombot1234
+    - Engine: v13_engine (UCI protocol)
+    - Config: lichess-bot-master/config.yml
+    - Time controls: blitz, rapid, classical
+    - Matchmaking: auto-challenges other bots every 1 min
+    - Uses Lichess opening explorer (masters) and online endgame tablebases (7-piece)
+    - Run with: cd lichess-bot-master && python lichess-bot.py
+
+
+Running the Bot:
+    # Compile the v13 C engine (only needed once, or after code changes):
+    cd c_rewrite && make
+
+    # Run the Lichess bot (same command as before, config now points to v13):
+    cd lichess-bot-master && python lichess-bot.py
+
+    # Test the engine directly via UCI:
+    echo -e "uci\nisready\nposition startpos moves e2e4 e7e5\ngo depth 10\nquit" | ./c_rewrite/v13_engine
+
+    # Old v12 Python engine (still available):
+    python -c "import chess; from bots.v12 import get_best_move; b = chess.Board(); print(get_best_move(b, depth=7))"
+
+
+ API Key - Set LICHESS_BOT_TOKEN env var (see .env file)
