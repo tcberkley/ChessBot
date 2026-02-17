@@ -3689,7 +3689,7 @@ void search_position(int max_depth, int time_budget_ms)
                 break;
         }
 
-        v13_stopped = 0;
+        if (v13_stopped) break;
 
         // Endgame extension: search 1 ply deeper when few pieces remain
         int search_depth = (game_phase < PHASE_THRESHOLD) ? current_depth + 1 : current_depth;

@@ -81,3 +81,5 @@ Running the Bot:
 
 
  API Key - Set LICHESS_BOT_TOKEN env var (see .env file)
+
+ GitHub - https://github.com/tcberkley/ChessBot
