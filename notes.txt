@@ -74,9 +74,21 @@ Bot Description:
                        Source: c_rewrite/v14_engine.c
                        Binary: c_rewrite/v14_engine (compiled with gcc -O3 -march=native)
 
+    v15 - evaluation improvements on top of v14. New terms: rooks on open/semi-open
+                       files (+20/+10), rook on 7th rank (+25 EG/+15 MG), king safety
+                       open-file penalty near king (−10 open/−5 semi-open, MG only, half-
+                       weight), knight outpost bonus (+15, +10 extra if pawn-defended),
+                       backward pawn penalty (−10), tapered PSTs for bishops/rooks/queens
+                       (separate MG and EG tables). Search and time management identical
+                       to v14. 30-game fixed-depth test (depth 10) vs v14: v15 56.7%
+                       (+13 =8 -9). Avg move time 108ms vs 101ms (+7%), nodes 287k vs
+                       272k (+6%) — richer eval shifts pruning thresholds slightly.
+                       Source: c_rewrite/v15_engine.c
+                       Binary: c_rewrite/v15_engine (compiled with gcc -O3 -march=native)
+
 Lichess Bot Setup:
     - Account: tombot1234
-    - Engine: v14_engine (UCI protocol)
+    - Engine: v15_engine (UCI protocol)
     - Config: lichess-bot-master/config.yml
     - Time controls: blitz, rapid, classical
     - Matchmaking: auto-challenges other bots every 1 min; offers rematch after a win
