@@ -1,16 +1,17 @@
 CC = gcc
 CFLAGS = -O3 -Wall -Wno-unused-variable -Wno-unused-function
+V14FLAGS = -O3 -march=native -fomit-frame-pointer -Wall -Wno-unused-variable -Wno-unused-function
 LDFLAGS = -lm
 
-TARGET = v13_engine
-SRC = v13_engine.c
+all: v13_engine v14_engine
 
-all: $(TARGET)
+v13_engine: v13_engine.c
+	$(CC) $(CFLAGS) -o v13_engine v13_engine.c $(LDFLAGS)
 
-$(TARGET): $(SRC)
-	$(CC) $(CFLAGS) -o $(TARGET) $(SRC) $(LDFLAGS)
+v14_engine: v14_engine.c
+	$(CC) $(V14FLAGS) -o v14_engine v14_engine.c $(LDFLAGS)
 
 clean:
-	rm -f $(TARGET)
+	rm -f v13_engine v14_engine
 
 .PHONY: all clean

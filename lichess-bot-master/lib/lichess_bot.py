@@ -398,7 +398,12 @@ def lichess_bot_main(li: LICHESS_TYPE,
                 break
             elif event["type"] == "local_game_done":
                 active_games.discard(event["game"]["id"])
-                matchmaker.game_done()
+                matchmaker.game_done(opponent=event.get("opponent", ""),
+                                     won=event.get("won", False),
+                                     base_time=event.get("base_time", 0),
+                                     increment=event.get("increment", 0),
+                                     days=event.get("days", 0),
+                                     mode=event.get("mode", "rated"))
                 log_proc_count("Freed", active_games)
                 one_game_completed = True
             elif event["type"] == "challenge":
@@ -917,7 +922,16 @@ def final_queue_entries(control_queue: CONTROL_QUEUE_TYPE, correspondence_queue:
     else:
         logger.info(f"--- {game.url()} Game over")
 
-    control_queue.put_nowait({"type": "local_game_done", "game": {"id": game.id}})
+    winner = game.state.get("winner")
+    bot_won = (winner == "white" and game.is_white) or (winner == "black" and not game.is_white)
+    control_queue.put_nowait({"type": "local_game_done",
+                              "game": {"id": game.id},
+                              "opponent": game.opponent.name,
+                              "won": bot_won,
+                              "base_time": int(to_seconds(game.clock_initial)),
+                              "increment": int(to_seconds(game.clock_increment)),
+                              "days": 0,
+                              "mode": game.mode})
     pgn_queue.put_nowait({"game": {"id": game.id,
                                    "pgn": pgn_record,
                                    "complete": is_game_over(game)}})

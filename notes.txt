@@ -56,25 +56,43 @@ Bot Description:
                        Source: c_rewrite/v13_engine.c (~3900 lines)
                        Binary: c_rewrite/v13_engine (compiled with gcc -O3)
 
+    v14 - search and time management improvements on top of v13. More aggressive time
+                       usage (moves_left: 40/30/20 → 25/20/15, max budget cap: 20% → 33% of
+                       clock, check_time threshold: 80% → 90%, depth-skip threshold: 40% → 55%,
+                       aspiration bail threshold: 50% → 70%). Algorithm: reverse futility pruning
+                       added (at depth ≤ 3, if static_eval - 100*depth ≥ beta, return early —
+                       reduces nodes by ~41% at depth 10). Efficiency: TIME_CHECK_INTERVAL doubled
+                       (2048 → 4096 nodes), TT prefetch via __builtin_prefetch before hash lookup.
+                       Compiler: -O3 -march=native -fomit-frame-pointer for ~2% NPS gain. Eval
+                       identical to v13 (eval changes tested but reverted — hurt fixed-depth play).
+                       Lichess bot now offers immediate rematch after a win. 50-game fixed-depth
+                       test (depth 10) vs v13: v14 52% (+20 =12 -18), 32% faster per move
+                       (99ms vs 146ms), 24% fewer nodes/move (278k vs 365k).
+                       Source: c_rewrite/v14_engine.c
+                       Binary: c_rewrite/v14_engine (compiled with gcc -O3 -march=native)
+
 Lichess Bot Setup:
     - Account: tombot1234
-    - Engine: v13_engine (UCI protocol)
+    - Engine: v14_engine (UCI protocol)
     - Config: lichess-bot-master/config.yml
     - Time controls: blitz, rapid, classical
-    - Matchmaking: auto-challenges other bots every 1 min
+    - Matchmaking: auto-challenges other bots every 1 min; offers rematch after a win
     - Uses Lichess opening explorer (masters) and online endgame tablebases (7-piece)
     - Run with: cd lichess-bot-master && python lichess-bot.py
 
 
 Running the Bot:
-    # Compile the v13 C engine (only needed once, or after code changes):
+    # Compile both C engines (only needed once, or after code changes):
     cd c_rewrite && make
 
-    # Run the Lichess bot (same command as before, config now points to v13):
+    # Run the Lichess bot (config points to v14):
     cd lichess-bot-master && python lichess-bot.py
 
     # Test the engine directly via UCI:
-    echo -e "uci\nisready\nposition startpos moves e2e4 e7e5\ngo depth 10\nquit" | ./c_rewrite/v13_engine
+    echo -e "uci\nisready\nposition startpos moves e2e4 e7e5\ngo depth 10\nquit" | ./c_rewrite/v14_engine
+
+    # Run v13 vs v14 tournament at fixed depth:
+    python tests/uci_tournament.py --games 100 --depth 10
 
     # Old v12 Python engine (still available):
     python -c "import chess; from bots.v12 import get_best_move; b = chess.Board(); print(get_best_move(b, depth=7))"
@@ -83,3 +101,6 @@ Running the Bot:
  API Key - Set LICHESS_BOT_TOKEN env var (see .env file)
 
  GitHub - https://github.com/tcberkley/ChessBot
+
+
+ To-do: (cleared — all completed in v14)

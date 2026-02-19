@@ -72,10 +72,17 @@ class Matchmaking:
         for name in self.matchmaking_cfg.block_list:
             self.add_to_block_list(name)
 
+        # Rematch tracking: offer immediate rematch after a win
+        self.rematch_opponent: Optional[str] = None
+        self.rematch_base_time: int = 0
+        self.rematch_increment: int = 0
+        self.rematch_days: int = 0
+        self.rematch_mode: str = "rated"
+
     def should_create_challenge(self) -> bool:
         """Whether we should create a challenge."""
         matchmaking_enabled = self.matchmaking_cfg.allow_matchmaking
-        time_has_passed = self.last_game_ended_delay.is_expired()
+        time_has_passed = self.last_game_ended_delay.is_expired() or bool(self.rematch_opponent)
         challenge_expired = self.last_challenge_created_delay.is_expired() and self.challenge_id
         min_wait_time_passed = self.last_challenge_created_delay.time_since_reset() > self.min_wait_time
         if challenge_expired:
@@ -172,6 +179,19 @@ class Matchmaking:
 
     def choose_opponent(self) -> tuple[Optional[str], int, int, int, str, str]:
         """Choose an opponent."""
+        # Offer immediate rematch if we won the last game
+        if self.rematch_opponent:
+            opponent = self.rematch_opponent
+            base_time = self.rematch_base_time
+            increment = self.rematch_increment
+            days = self.rematch_days
+            mode = self.rematch_mode
+            self.rematch_opponent = None  # Clear so we don't loop forever
+            if not self.in_block_list(opponent):
+                variant = self.get_random_config_value(self.matchmaking_cfg, "challenge_variant", self.variants)
+                logger.info(f"Offering rematch to {opponent} ({base_time}+{increment}).")
+                return (opponent, base_time, increment, days, variant, mode)
+
         override_choice = random.choice(self.matchmaking_cfg.overrides.keys() + [None])
         logger.info(f"Using the {override_choice or 'default'} matchmaking configuration.")
         override = {} if override_choice is None else self.matchmaking_cfg.overrides.lookup(override_choice)
@@ -277,9 +297,17 @@ class Matchmaking:
         if self.challenge_id == challenge_id:
             self.challenge_id = ""
 
-    def game_done(self) -> None:
+    def game_done(self, opponent: str = "", won: bool = False,
+                  base_time: int = 0, increment: int = 0, days: int = 0, mode: str = "rated") -> None:
         """Reset the timer for when the last game ended, and prints the earliest that the next challenge will be created."""
         self.last_game_ended_delay.reset()
+        if won and opponent:
+            logger.info(f"Won against {opponent} — queuing immediate rematch.")
+            self.rematch_opponent = opponent
+            self.rematch_base_time = base_time
+            self.rematch_increment = increment
+            self.rematch_days = days
+            self.rematch_mode = mode
         self.show_earliest_challenge_time()
 
     def show_earliest_challenge_time(self) -> None:

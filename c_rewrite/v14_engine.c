@@ -302,6 +302,7 @@ U64 bitboards[12];
 // occupancy bitboards
 U64 occupancies[3];
 
+
 // side to move
 int side;
 
@@ -340,7 +341,7 @@ int fullmove_number = 1;
 int quit = 0;
 
 // v13 search stop flag (declared here so read_input can use it, defined in search section)
-int v13_stopped = 0;
+int v14_stopped = 0;
 
 // UCI "movestogo" command moves counter
 int movestogo = 30;
@@ -472,12 +473,12 @@ void read_input()
             {
                 quit = 1;
                 stopped = 1;
-                v13_stopped = 1;
+                v14_stopped = 1;
             }
             else if (!strncmp(input, "stop", 4))
             {
                 stopped = 1;
-                v13_stopped = 1;
+                v14_stopped = 1;
             }
         }
     }
@@ -561,40 +562,18 @@ U64 generate_magic_number()
 #define get_bit(bitboard, square) ((bitboard) & (1ULL << (square)))
 #define pop_bit(bitboard, square) ((bitboard) &= ~(1ULL << (square)))
 
-// count bits within a bitboard (Brian Kernighan's way)
+// count bits within a bitboard (hardware popcount)
 static inline int count_bits(U64 bitboard)
 {
-    // bit counter
-    int count = 0;
-    
-    // consecutively reset least significant 1st bit
-    while (bitboard)
-    {
-        // increment count
-        count++;
-        
-        // reset least significant 1st bit
-        bitboard &= bitboard - 1;
-    }
-    
-    // return bit count
-    return count;
+    return __builtin_popcountll(bitboard);
 }
 
-// get least significant 1st bit index
+// get least significant 1st bit index (hardware ctz)
 static inline int get_ls1b_index(U64 bitboard)
 {
-    // make sure bitboard is not 0
     if (bitboard)
-    {
-        // count trailing bits before LS1B
-        return count_bits((bitboard & -bitboard) - 1);
-    }
-    
-    //otherwise
-    else
-        // return illegal index
-        return -1;
+        return __builtin_ctzll(bitboard);
+    return -1;
 }
 
 
@@ -943,18 +922,19 @@ void parse_fen(char *fen)
     for (int piece = P; piece <= K; piece++)
         // populate white occupancy bitboard
         occupancies[white] |= bitboards[piece];
-    
+
     // loop over black pieces bitboards
     for (int piece = p; piece <= k; piece++)
         // populate white occupancy bitboard
         occupancies[black] |= bitboards[piece];
-    
+
     // init all occupancies
     occupancies[both] |= occupancies[white];
     occupancies[both] |= occupancies[black];
-    
+
     // init hash key
     hash_key = generate_hash_key();
+
 }
 
 
@@ -2114,6 +2094,8 @@ static inline int make_move(int move, int move_flag)
         occupancies[both] |= occupancies[white];
         occupancies[both] |= occupancies[black];
 
+
+
         // change side
         side ^= 1;
 
@@ -2822,7 +2804,7 @@ void init_evaluation_masks()
 \**********************************/
 
 // v13 piece values in centipawns [P, N, B, R, Q, K, p, n, b, r, q, k]
-const int v13_piece_values[12] = {
+const int v14_piece_values[12] = {
     100, 300, 300, 500, 900, 0,
    -100,-300,-300,-500,-900, 0
 };
@@ -3275,11 +3257,11 @@ int lmr_table[64][64];
 const int futility_margins[3] = {0, 150, 350};
 
 // Time control globals
-int v13_time_budget_ms = 0;    // allocated time for this move in ms
-long v13_search_start = 0;     // start time in ms
-// v13_stopped declared near top of file with other globals
-int v13_hard_limit_ms = 0;     // absolute max time (safety net: don't use >50% of clock)
-#define TIME_CHECK_INTERVAL 2048
+int v14_time_budget_ms = 0;    // allocated time for this move in ms
+long v14_search_start = 0;     // start time in ms
+// v14_stopped declared near top of file with other globals
+int v14_hard_limit_ms = 0;     // absolute max time (safety net: don't use >50% of clock)
+#define TIME_CHECK_INTERVAL 4096
 
 // Initialize LMR table
 void init_lmr_table()
@@ -3292,14 +3274,14 @@ void init_lmr_table()
 // Check if we should stop searching (time + GUI input)
 static inline void check_time()
 {
-    if (v13_time_budget_ms > 0) {
-        long elapsed = get_time_ms() - v13_search_start;
-        // Normal budget: stop at 80%
-        if (elapsed > (long)(v13_time_budget_ms * 0.8))
-            v13_stopped = 1;
+    if (v14_time_budget_ms > 0) {
+        long elapsed = get_time_ms() - v14_search_start;
+        // Normal budget: stop at 90%
+        if (elapsed > (long)(v14_time_budget_ms * 0.9))
+            v14_stopped = 1;
         // Hard safety limit: never exceed this (prevents losing on time)
-        if (v13_hard_limit_ms > 0 && elapsed > v13_hard_limit_ms)
-            v13_stopped = 1;
+        if (v14_hard_limit_ms > 0 && elapsed > v14_hard_limit_ms)
+            v14_stopped = 1;
     }
     // NOTE: Do NOT call read_input() here. raw read() can consume
     // multiple lines from stdin, eating position/go commands meant
@@ -3332,7 +3314,7 @@ static inline int score_move(int move, int tt_move)
     if (move == tt_move)
         return 2000000;
 
-    // Captures: MVV-LVA + 10000 base
+    // Captures: MVV-LVA
     if (get_move_capture(move)) {
         int target_piece = P;
         int start_piece = (side == white) ? p : P;
@@ -3387,7 +3369,7 @@ static inline int quiescence(int alpha, int beta)
     if ((nodes & (TIME_CHECK_INTERVAL - 1)) == 0)
         check_time();
 
-    if (v13_stopped) return 0;
+    if (v14_stopped) return 0;
 
     if (ply > max_ply - 1)
         return evaluate();
@@ -3428,7 +3410,7 @@ static inline int quiescence(int alpha, int beta)
         repetition_index--;
         take_back();
 
-        if (v13_stopped) return 0;
+        if (v14_stopped) return 0;
 
         if (score > alpha) {
             alpha = score;
@@ -3449,7 +3431,7 @@ static inline int negamax(int alpha, int beta, int depth, int null_ok)
     if ((nodes & (TIME_CHECK_INTERVAL - 1)) == 0)
         check_time();
 
-    if (v13_stopped) return 0;
+    if (v14_stopped) return 0;
 
     // Init PV length
     pv_length[ply] = ply;
@@ -3461,7 +3443,8 @@ static inline int negamax(int alpha, int beta, int depth, int null_ok)
     // PV node flag
     int pv_node = (beta - alpha > 1);
 
-    // TT lookup
+    // TT lookup (prefetch slot into cache before other work)
+    __builtin_prefetch(&hash_table[hash_key & TT_MASK], 0, 1);
     int tt_best_move = 0;
     if (ply) {
         int tt_score = read_hash_entry(alpha, beta, depth, &tt_best_move);
@@ -3505,18 +3488,27 @@ static inline int negamax(int alpha, int beta, int depth, int null_ok)
         repetition_index--;
         take_back();
 
-        if (v13_stopped) return 0;
+        if (v14_stopped) return 0;
 
         if (null_score >= beta)
             return beta;
     }
 
-    // Futility pruning setup
+    // Futility pruning setup (compute eval once for both forward and reverse)
     int futile = 0;
-    if (depth <= 2 && !in_check && alpha > -mate_score && alpha < mate_score) {
+    if (depth <= 3 && !in_check && !pv_node) {
         int static_eval = evaluate();
-        if (static_eval + futility_margins[depth] <= alpha)
-            futile = 1;
+
+        // Reverse futility pruning: if eval - margin >= beta, this node is too good
+        // for opponent to allow, so prune it
+        if (static_eval - 100 * depth >= beta && beta > -mate_score && beta < mate_score)
+            return static_eval;
+
+        // Forward futility pruning: if eval + margin <= alpha, quiet moves won't help
+        if (depth <= 2 && alpha > -mate_score && alpha < mate_score) {
+            if (static_eval + futility_margins[depth] <= alpha)
+                futile = 1;
+        }
     }
 
     // Generate and sort moves
@@ -3572,7 +3564,7 @@ static inline int negamax(int alpha, int beta, int depth, int null_ok)
             score = -negamax(-alpha - 1, -alpha, depth - 1 - reduction, 1);
 
             // Re-search if it beats alpha
-            if (!v13_stopped && score > alpha && (reduction > 0 || score < beta))
+            if (!v14_stopped && score > alpha && (reduction > 0 || score < beta))
                 score = -negamax(-beta, -alpha, depth - 1, 1);
         }
 
@@ -3580,7 +3572,7 @@ static inline int negamax(int alpha, int beta, int depth, int null_ok)
         repetition_index--;
         take_back();
 
-        if (v13_stopped) return 0;
+        if (v14_stopped) return 0;
 
         if (score > best_score) {
             best_score = score;
@@ -3634,14 +3626,14 @@ static inline int negamax(int alpha, int beta, int depth, int null_ok)
 static int allocate_time(int my_time_ms, int my_inc_ms, int move_number)
 {
     int moves_left;
-    if (move_number < 10) moves_left = 40;
-    else if (move_number < 30) moves_left = 30;
-    else moves_left = 20;
+    if (move_number < 10) moves_left = 25;
+    else if (move_number < 30) moves_left = 20;
+    else moves_left = 15;
 
     int base = my_time_ms / moves_left;
-    base += (int)(my_inc_ms * 0.8);
+    base += (int)(my_inc_ms * 0.9);
 
-    int max_time = my_time_ms / 5;
+    int max_time = my_time_ms / 3;
     int min_time = my_time_ms / 20;
     if (min_time > 500) min_time = 500;
 
@@ -3657,10 +3649,10 @@ void search_position(int max_depth, int time_budget_ms)
 {
     // Reset
     nodes = 0;
-    v13_stopped = 0;
+    v14_stopped = 0;
     stopped = 0;
-    v13_search_start = get_time_ms();
-    v13_time_budget_ms = time_budget_ms;
+    v14_search_start = get_time_ms();
+    v14_time_budget_ms = time_budget_ms;
 
     memset(killer_moves, 0, sizeof(killer_moves));
     memset(history_moves, 0, sizeof(history_moves));
@@ -3682,14 +3674,14 @@ void search_position(int max_depth, int time_budget_ms)
     else min_depth = 5;
 
     for (int current_depth = 1; current_depth <= max_depth; current_depth++) {
-        // Time check: don't start new depth if 40%+ of budget used
+        // Time check: don't start new depth if 55%+ of budget used
         if (time_budget_ms > 0 && current_depth > min_depth) {
-            long elapsed = get_time_ms() - v13_search_start;
-            if (elapsed > (long)(time_budget_ms * 0.4))
+            long elapsed = get_time_ms() - v14_search_start;
+            if (elapsed > (long)(time_budget_ms * 0.55))
                 break;
         }
 
-        if (v13_stopped) break;
+        if (v14_stopped) break;
 
         // Endgame extension: search 1 ply deeper when few pieces remain
         int search_depth = (game_phase < PHASE_THRESHOLD) ? current_depth + 1 : current_depth;
@@ -3706,11 +3698,11 @@ void search_position(int max_depth, int time_budget_ms)
         score = negamax(alpha, beta, search_depth, 1);
 
         // Aspiration window fail: re-search with full window
-        if (!v13_stopped && (score <= alpha || score >= beta)) {
+        if (!v14_stopped && (score <= alpha || score >= beta)) {
             // Check if we have time for re-search
             if (time_budget_ms > 0) {
-                long elapsed = get_time_ms() - v13_search_start;
-                if (elapsed > (long)(time_budget_ms * 0.5)) {
+                long elapsed = get_time_ms() - v14_search_start;
+                if (elapsed > (long)(time_budget_ms * 0.7)) {
                     // Not enough time, use the result we have
                     if (pv_length[0] > 0)
                         best_move_found = pv_table[0][0];
@@ -3722,14 +3714,14 @@ void search_position(int max_depth, int time_budget_ms)
             score = negamax(alpha, beta, search_depth, 1);
         }
 
-        if (v13_stopped) break;
+        if (v14_stopped) break;
 
         // This depth completed successfully — save the best move
         if (pv_length[0] > 0)
             best_move_found = pv_table[0][0];
 
         // Print UCI info
-        long elapsed = get_time_ms() - v13_search_start;
+        long elapsed = get_time_ms() - v14_search_start;
         if (elapsed < 1) elapsed = 1;
 
         if (score > -mate_value && score < -mate_score)
@@ -3894,7 +3886,7 @@ void parse_go(char *command)
             // Hard safety: never use more than 40% of remaining clock minus overhead
             int hard = (int)(my_time * 0.4) - 1000;
             if (hard < time_budget_ms) hard = time_budget_ms;
-            v13_hard_limit_ms = hard;
+            v14_hard_limit_ms = hard;
             search_depth = 30;
         } else {
             // Infinite or no time info
@@ -4011,7 +4003,7 @@ void uci_loop()
             continue;  // Ignore options we don't support
 
         if (strncmp(input, "uci", 3) == 0) {
-            printf("id name v13\n");
+            printf("id name v14\n");
             printf("id author tomberkley\n");
             printf("uciok\n");
             fflush(stdout);
