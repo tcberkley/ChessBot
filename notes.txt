@@ -1,16 +1,134 @@
-Bot Description:
+Lichess Bot Setup:
+    - Account: tombot1234
+    - Engine: v15_engine (UCI protocol)
+    - Config: lichess-bot-master/config.yml
+    - Time controls: blitz, rapid, classical
+    - Matchmaking: auto-challenges other bots every 1 min; offers rematch after a win
+    - Uses Lichess opening explorer (masters) and online endgame tablebases (7-piece)
+    - Run with: cd lichess-bot-master && python lichess-bot.py
+
+
+Running the Bot:
+    # Compile all C engines (only needed once, or after code changes):
+    cd c_rewrite && make
+
+    # Run the Lichess bot (config points to v15):
+    cd lichess-bot-master && python lichess-bot.py
+
+    # Test the engine directly via UCI:
+    echo -e "uci\nisready\nposition startpos moves e2e4 e7e5\ngo depth 10\nquit" | ./c_rewrite/v15_engine
+
+    # Run tournament at fixed depth:
+    python tests/uci_tournament.py --engine1 c_rewrite/v14_engine --engine2 c_rewrite/v15_engine --positions 15 --depth 10
+
+    # Old v12 Python engine (still available):
+    python -c "import chess; from bots.v12 import get_best_move; b = chess.Board(); print(get_best_move(b, depth=7))"
+
+
+ API Key - Set LICHESS_BOT_TOKEN env var (see .env file)
+
+ GitHub - https://github.com/tcberkley/ChessBot
+
+
+Missing Features / To-Do:
+    Ranked by estimated Elo gain. Ranges are rough — 30-game samples have wide CIs.
+    Items marked DONE were implemented in v16.
+
+    --- Search ---
+
+    Check extensions                       DONE (already in v15)
+        When the side to move is in check, extend the search by 1 ply. Prevents
+        missing forced sequences that begin with a check.
+
+    50-move rule / draw detection          DONE (v16)
+        Halfmove clock now parsed and tracked; engine returns draw score at 100.
+        Insufficient material detection (KK, KBK, KNK) also returns 0.
+
+    Pondering                              ~20-40 Elo
+        Search during the opponent's clock on the expected reply. If the opponent
+        plays that move, the search result is reused immediately — effectively
+        doubles thinking time for free. Complicates time management; config.yml
+        already has ponder: false ready to flip.
+
+    Score instability / time extension     DONE (v16)
+        If best move is stable for 3+ depths with small score swing, exit search
+        early once past 40% of time budget. (Time-controlled mode only.)
+
+    Singular extensions                    ~10-20 Elo
+        If the TT move at a node is significantly better than all alternatives
+        (margin test against reduced search), extend it by 1 ply. Complex to
+        implement correctly without causing search explosions.
+
+    Internal Iterative Deepening (IID)     DONE (v16)
+        At PV nodes with no TT move and depth >= 5, run a depth-2 shallow search
+        first for move ordering.
+
+    Aspiration window gradual widening     DONE (v16)
+        On aspiration failure, widen gradually (±50 → ±150 → ±450 → full)
+        instead of jumping straight to a full-width re-search.
+
+    --- Evaluation ---
+
+    Rook behind passed pawn                DONE (v16)
+        +20 bonus when a rook is behind its own passed pawn on the same file.
+
+    Pawn shield quality                    DONE (v16)
+        Replaced flat shield count with quality scoring: +15 for immediate pawn,
+        +8 for one step advanced. Only counts pawns directly in front of king
+        (not same-rank adjacent pawns).
+
+    50-move / insufficient material eval   DONE (v16)
+        Eval returns 0 for KK, KBK, KNK configurations.
+
+    Tempo / side-to-move bonus             ~5-15 Elo
+        Small flat bonus (~10 cp) for the side to move. NOTE: Must NOT be added
+        to evaluate() directly — the quiescence stand_pat would make captures
+        worth <20cp look unprofitable. Needs careful placement (e.g., only at
+        main negamax leaf nodes, not quiescence).
+
+    Connected rooks                        DONE (v16)
+        +15 bonus for two rooks on the same open file or rank (no pieces between).
+
+    Pawn islands                           DONE (v16)
+        -8 cp per extra island beyond the first.
+
+    King mobility in endgame               DONE (v16)
+        +3 cp per safe king move in endgame phase.
+
+    Candidate passed pawns                 ~5-10 Elo
+        Pawns that could become passed with the right pawn exchanges. Initial
+        implementation removed — too error-prone without proper forward-only
+        support counting.
+
+    Weak squares / holes                   ~5-10 Elo
+        Squares that can never be defended by a pawn again (after pawn advances)
+        invite enemy piece occupation. Especially dangerous near the king.
+
+
+    --- Infrastructure ---
+
+
+    UCI multipv                            0 Elo (analysis only)
+        Return N best moves. Useful for analysis; no effect on play strength.
+
+    UCI go movetime                        0 Elo (compatibility)
+        Fixed time per move. Required for some GUIs and testing frameworks.
+        Currently only wtime/btime/winc/binc are handled.
+
+
+Bot Version History:
     Random Bot - Makes a random move every turn
-    
+
     mini_max_v1 - Uses mini max algo to find best position based on only material
-    
+
     mini_max_v2 - Uses mini max algo to find best position based on material and position of knights and pawns, but does so incorrectly
-    
+
     alpha_beta_mm_v3 - Uses alpha/beta pruning to speed up algo. Incentivizes good positioning for queen and bishop
-    
+
     endgame_faster_v4 - Searches deeper in the endgame, optimizes get_adj_material algo
-    
+
     castle_bot_v5 - rewards abaility to castle (1 point per side), rewards castling more (5 points)
-    
+
     king_safety_v6 - rewards king safety, removes castling incentive, fixes material evaluation error
 
     quiescence_v7 - adds quiescence search, transposition table, repetition penalty, passed pawns, rook mobility, fixes castling bug from v6
@@ -83,39 +201,30 @@ Bot Description:
                        to v14. 30-game fixed-depth test (depth 10) vs v14: v15 56.7%
                        (+13 =8 -9). Avg move time 108ms vs 101ms (+7%), nodes 287k vs
                        272k (+6%) — richer eval shifts pruning thresholds slightly.
+                       Reaching depth 15-18 in blitz (vs v13's depth 16).
                        Source: c_rewrite/v15_engine.c
                        Binary: c_rewrite/v15_engine (compiled with gcc -O3 -march=native)
 
-Lichess Bot Setup:
-    - Account: tombot1234
-    - Engine: v15_engine (UCI protocol)
-    - Config: lichess-bot-master/config.yml
-    - Time controls: blitz, rapid, classical
-    - Matchmaking: auto-challenges other bots every 1 min; offers rematch after a win
-    - Uses Lichess opening explorer (masters) and online endgame tablebases (7-piece)
-    - Run with: cd lichess-bot-master && python lichess-bot.py
-
-
-Running the Bot:
-    # Compile both C engines (only needed once, or after code changes):
-    cd c_rewrite && make
-
-    # Run the Lichess bot (config points to v14):
-    cd lichess-bot-master && python lichess-bot.py
-
-    # Test the engine directly via UCI:
-    echo -e "uci\nisready\nposition startpos moves e2e4 e7e5\ngo depth 10\nquit" | ./c_rewrite/v14_engine
-
-    # Run v13 vs v14 tournament at fixed depth:
-    python tests/uci_tournament.py --games 100 --depth 10
-
-    # Old v12 Python engine (still available):
-    python -c "import chess; from bots.v12 import get_best_move; b = chess.Board(); print(get_best_move(b, depth=7))"
-
-
- API Key - Set LICHESS_BOT_TOKEN env var (see .env file)
-
- GitHub - https://github.com/tcberkley/ChessBot
-
-
- To-do: (cleared — all completed in v14)
+    v16 - search and evaluation improvements on top of v15. Search: 50-move rule
+                       (halfmove clock now parsed and tracked; draw returned at >=100
+                       half-moves), aspiration window gradual widening (±50 → ±150 →
+                       ±450 → full on failure instead of jumping straight to full),
+                       score instability / easy-move detection (exit search early if
+                       best move stable 3+ depths with swing <30cp and past 40% of
+                       budget), Internal Iterative Deepening (at PV nodes with no TT
+                       hit and depth>=5, run depth-2 shallow search for move ordering).
+                       Eval: rook behind passed pawn (+20), pawn shield quality scoring
+                       (rank_dist=1: +15, rank_dist=2: +8, replaces flat shield count),
+                       connected rooks (+15 if two rooks share clear file or rank),
+                       pawn islands penalty (-8 per island beyond the first), king
+                       mobility in endgame (+3 per safe move), insufficient material
+                       draw detection (KK, KBK, KNK → 0). NOTE: tempo bonus (+10 for
+                       side to move) was implemented and removed — adding it inside
+                       evaluate() breaks quiescence: stand_pat gets +10 but captures
+                       don't, so the engine rejects any capture worth <20cp. Candidate
+                       passed pawns were also attempted but removed — the support-count
+                       logic was too broad. 30-game fixed-depth test (depth 10) vs v15:
+                       approximately equal (+9 =12 -8 for v15, 51.7%). Node ratio
+                       0.97x v15 — features add search complexity but pruning offsets.
+                       Source: c_rewrite/v16_engine.c
+                       Binary: c_rewrite/v16_engine (compiled with gcc -O3 -march=native)
