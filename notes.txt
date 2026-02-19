@@ -60,14 +60,17 @@ Bot Description:
                        usage (moves_left: 40/30/20 → 25/20/15, max budget cap: 20% → 33% of
                        clock, check_time threshold: 80% → 90%, depth-skip threshold: 40% → 55%,
                        aspiration bail threshold: 50% → 70%). Algorithm: reverse futility pruning
-                       added (at depth ≤ 3, if static_eval - 100*depth ≥ beta, return early —
-                       reduces nodes by ~41% at depth 10). Efficiency: TIME_CHECK_INTERVAL doubled
-                       (2048 → 4096 nodes), TT prefetch via __builtin_prefetch before hash lookup.
-                       Compiler: -O3 -march=native -fomit-frame-pointer for ~2% NPS gain. Eval
-                       identical to v13 (eval changes tested but reverted — hurt fixed-depth play).
-                       Lichess bot now offers immediate rematch after a win. 50-game fixed-depth
-                       test (depth 10) vs v13: v14 52% (+20 =12 -18), 32% faster per move
-                       (99ms vs 146ms), 24% fewer nodes/move (278k vs 365k).
+                       added (at depth ≤ 3, if static_eval - 100*depth ≥ beta, return early).
+                       Efficiency: TIME_CHECK_INTERVAL doubled (2048 → 4096 nodes), TT prefetch
+                       via __builtin_prefetch, quiescence pre-filter (break at first non-capture
+                       before copy_board — eliminates ~25 wasted memcpys per qsearch node),
+                       TT struct compacted 24→16 bytes (hash32 + signed char depth + uchar flag)
+                       doubling TT entries to 4M (64MB) with 4 entries per cache line. Compiler:
+                       -O3 -march=native -fomit-frame-pointer. Eval identical to v13 (eval changes
+                       tested but reverted — hurt fixed-depth play). Lichess bot now offers
+                       immediate rematch after a win. 50-game fixed-depth test (depth 10) vs v13:
+                       v14 52% (+20 =12 -18). Depth-12 benchmark vs v13: 2.14x faster, 0.538x
+                       nodes (46% fewer nodes searched).
                        Source: c_rewrite/v14_engine.c
                        Binary: c_rewrite/v14_engine (compiled with gcc -O3 -march=native)
 

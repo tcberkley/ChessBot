@@ -3140,7 +3140,7 @@ static inline int evaluate()
 \**********************************/
 
 // TT size: 2M entries (power of 2)
-#define TT_SIZE (1 << 21)  // 2097152
+#define TT_SIZE (1 << 22)  // 4194304 (64MB with 16-byte entries)
 #define TT_MASK (TT_SIZE - 1)
 
 #define NO_HASH_ENTRY 100000
@@ -3150,12 +3150,13 @@ static inline int evaluate()
 #define HASH_FLAG_BETA  2  // LOWERBOUND
 
 typedef struct {
-    U64 hash_key;
-    int depth;
-    int score;
-    int flag;
-    int best_move;
-} tt_entry;
+    unsigned int hash32;   // upper 32 bits of Zobrist key (saves 4 bytes vs full U64)
+    int best_move;         // 4 bytes
+    int score;             // 4 bytes (must stay int: scores reach ±49000)
+    signed char depth;     // 1 byte (max depth ~64, fits in signed char)
+    unsigned char flag;    // 1 byte (0=exact, 1=alpha, 2=beta)
+    unsigned char pad[2];  // 2 bytes padding for 4-byte alignment
+} tt_entry;                // 16 bytes total (4 entries per 64-byte cache line)
 
 tt_entry hash_table[TT_SIZE];
 
@@ -3170,11 +3171,11 @@ static inline int read_hash_entry(int alpha, int beta, int depth, int *tt_best_m
 {
     tt_entry *entry = &hash_table[hash_key & TT_MASK];
 
-    if (entry->hash_key == hash_key) {
+    if (entry->hash32 == (unsigned int)(hash_key >> 32)) {
         // Always extract best move regardless of depth
         *tt_best_move = entry->best_move;
 
-        if (entry->depth >= depth) {
+        if ((int)entry->depth >= depth) {
             int score = entry->score;
 
             // Adjust mate scores for search path
@@ -3199,16 +3200,16 @@ static inline void write_hash_entry(int score, int depth, int flag, int best_mov
     tt_entry *entry = &hash_table[hash_key & TT_MASK];
 
     // Depth-preferred: only overwrite if new depth >= stored depth, or different position
-    if (entry->hash_key != hash_key || depth >= entry->depth) {
+    if (entry->hash32 != (unsigned int)(hash_key >> 32) || depth >= (int)entry->depth) {
         // Adjust mate scores for storage
         if (score < -mate_score) score -= ply;
         if (score > mate_score) score += ply;
 
-        entry->hash_key = hash_key;
-        entry->depth = depth;
-        entry->score = score;
-        entry->flag = flag;
-        entry->best_move = best_move;
+        entry->hash32     = (unsigned int)(hash_key >> 32);
+        entry->depth      = (signed char)depth;
+        entry->score      = score;
+        entry->flag       = (unsigned char)flag;
+        entry->best_move  = best_move;
     }
 }
 
@@ -3392,13 +3393,18 @@ static inline int quiescence(int alpha, int beta)
     sort_moves(move_list, 0);
 
     for (int count = 0; count < move_list->count; count++) {
+        int move = move_list->moves[count];
+
+        // Skip non-captures before the expensive copy_board (since captures are
+        // sorted first, once we hit a non-capture we can break entirely)
+        if (!get_move_capture(move)) break;
+
         copy_board();
         ply++;
         repetition_index++;
         repetition_table[repetition_index] = hash_key;
 
-        // Only search captures (and promotions via only_captures flag)
-        if (make_move(move_list->moves[count], only_captures) == 0) {
+        if (make_move(move, all_moves) == 0) {
             ply--;
             repetition_index--;
             continue;
