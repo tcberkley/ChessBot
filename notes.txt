@@ -30,65 +30,130 @@ Running the Bot:
  GitHub - https://github.com/tcberkley/ChessBot
 
 
-Missing Features / To-Do:
+v19 Feature Candidates:
     Ranked by estimated Elo gain. Ranges are rough — small samples have wide CIs.
+    v18 already has: SEE, clustered TT, Lazy SMP, pawn hash, probcut,
+    cont/capture history, TT pre-try, singular extensions, IID, aspiration,
+    LMR, PVS, null move (adaptive R), futility (forward+reverse), delta pruning,
+    check/endgame extensions, score instability / easy-move detection.
 
-    --- Search ---
+    --- Search (highest bang-for-buck) ---
 
-    Singular extensions                    DONE — added to v18 (2026-02-20)
+    Late Move Pruning (LMP)                ~8-15 Elo
+        At low depths (<=4), not in check, not PV: if move_count exceeds a
+        threshold (e.g. depth*depth + 3*depth for quiet moves), skip the rest.
+        Harder version of LMR — outright prune instead of reduce. Move count
+        threshold from Weiss/Berserk: quiets_tried > (3 + depth*depth) / (2 - improving).
+        "improving" = static_eval > eval two plies ago (tracks eval trend).
+        Risk: may miss key quiet moves; keep captures/promotions/checks exempt.
 
-    Pondering                              ~20-40 Elo
-        Search during the opponent's clock on the expected reply. If the opponent
-        plays that move, the search result is reused immediately — effectively
-        doubles thinking time for free. Complicates time management; config.yml
-        already has ponder: false ready to flip.
+    History-adjusted LMR                   ~5-10 Elo
+        Currently LMR reduction is purely (depth, move_count). Adjust using
+        history score of the move: high-history moves get 1 ply less reduction,
+        negative-history moves get 1 ply more. Effectively concentrates search
+        on moves the engine has found good in the past.
+        Change: reduction -= (history_score / 8192); clamped to [0, depth-1].
 
-    Staged move generation                 ~5-10 Elo (speed)
-        TT pre-try is already in place. Next step: generate captures only first,
-        then killers + quiets. If any capture causes a cutoff, quiets are never
-        generated. Requires splitting generate_moves() into capture/quiet phases.
+    Razoring                               ~5-8 Elo
+        At depth 1 only: if static_eval + 300 < alpha, drop straight to
+        quiescence instead of full move loop. Complements forward futility
+        (already at depth 1-2) by catching positions where even qsearch won't
+        help. Simple: if (depth == 1 && !in_check && eval+300 < alpha)
+            return quiescence(alpha, beta).
 
-    Null move verification search          ~3-6 Elo
-        At high depths (depth >= 12), after a null-move cutoff verify with a
-        reduced search to avoid false prunes in zugzwang positions. Low priority
-        since zugzwang is rare in open positions.
+    Quiescence checks (depth -1)           ~3-7 Elo
+        In quiescence, at the first ply (ply immediately after dropping from
+        negamax), generate non-capturing checks in addition to captures. Cheap
+        checks that can be verified with SEE >= 0 only. Lets the engine see
+        forcing quiet checks that switch from -cp to 0 (drawing back). Adds
+        complexity; gate on depth == -1 to avoid deep explosion.
 
-    Better time management                 ~5-10 Elo
-        Scale time budget by position complexity: use more time when score has
-        shifted sharply between iterations (instability already detected — could
-        extend budget instead of just blocking easy-move exit). Use less time
-        in clearly winning/losing positions.
+    Staged move generation                 ~3-6 Elo (speed)
+        TT pre-try is in v18 already. Next: separate captures from quiets in
+        generate_moves(). If a capture causes a beta-cutoff, never generate
+        quiets at all (~20-30% of internal nodes saved). Requires splitting
+        generate_moves() into generate_captures() + generate_quiets() and
+        calling them separately in the move loop.
+
+    Multi-cut pruning                      ~3-6 Elo
+        At non-PV nodes depth>=6, not in check: try up to M=6 moves with a
+        null window at depth - R (R=3). If C=3 of them fail high (>= beta),
+        the node is almost certainly a cut node — return beta immediately.
+        Avoids wasting time at All-nodes. Gate: not already in null-move search,
+        score bounds not mating. Can false-prune; tune M/C/R conservatively.
 
     --- Evaluation ---
 
-    Texel tuning (eval weight optimization) ~10-30 Elo
-        Use a dataset of engine self-play or GM games to tune all PST values and
-        eval weights via gradient descent. High implementation effort but the
-        highest potential single-step gain. Stockfish, Ethereal all use this.
+    Rook + Queen mobility                  ~5-8 Elo
+        Currently only knight and bishop mobility are scored. Add rook mobility
+        (count reachable squares on open/semi-open file ≤ 14) and queen mobility
+        (similar). Same isqrt_x20 table scaling as knights. Rook MG bonus ~4cp
+        per reachable square, queen ~2cp. Cache via occupancies[both] which is
+        already available. Endgame-taper both: more valuable in MG when lines
+        are closed.
 
-    Candidate passed pawns                 ~5-10 Elo
-        Pawns that could become passed given the right pawn exchanges. Only fire
-        when enemy_ahead_count == 1 and friendly_support_count >= 1. Give ~25%
-        of the passed pawn bonus. Stricter than the v16 attempt that was removed.
+    King tropism (piece proximity to enemy king)  ~4-7 Elo
+        Bonus for own pieces close to the enemy king in middlegame. Use Chebyshev
+        distance: bonus = (7 - dist) * weight where weight≈2 for queen, 1 for
+        rook, 1 for bishop, 1 for knight. Complements existing king_attack_count;
+        tropism rewards approach even before pieces enter the attack zone.
+        Only in MG (phase >= PHASE_THRESHOLD).
 
-    Weak squares / holes                   ~5-10 Elo
-        Squares that can never be controlled by own pawns again penalize piece
-        activity. Simplified version: penalize enemy knights sitting on squares
-        not attackable by any own pawn (-20 cp per such knight).
+    Passed pawn king proximity              ~4-7 Elo
+        In endgame (phase < PHASE_THRESHOLD): bonus when own king is close to
+        own passed pawn (supporting advance); penalty when enemy king is close
+        to own passed pawn (blocking). Use Manhattan distance from king to passer.
+        Formula: score += (5 - own_king_dist_to_passer) * 8 (capped at 40cp);
+                 score -= (5 - enemy_king_dist_to_passer) * 8.
+        Store passed pawn squares from pawn_hash entry (already computed).
 
-    Threat detection in eval               ~5-8 Elo
-        Reward positions where own pieces attack undefended enemy pieces; penalize
-        positions where opponent has threats. Complements king attack count scoring.
+    Candidate passed pawns                 ~4-8 Elo
+        Pawns where only ONE enemy pawn is ahead on the same or adjacent file
+        and there's at least one own pawn able to exchange into a passed pawn.
+        Give ~25% of passed pawn bonus. Condition: popcount(pass_mask & enemy) == 1
+        AND popcount(adj_files & own_ahead) >= 1. Stricter than the v16 attempt.
+        Add to pawn_eval_side() so it's pawn-hash-cached.
 
-    Endgame knowledge                      ~3-8 Elo
-        KPK opposition logic (can king reach queening square before pawn),
-        rook + pawn vs rook technique hints, mop-up eval improvements for
-        queen/rook vs lone king. Currently relies on Lichess 7-piece tablebase.
+    Mop-up eval (lone king endgame)        ~3-6 Elo
+        When opponent has only a lone king: score = material + 4*(centre_dist
+        of enemy king) + 5*(7 - manhattan_dist(own_king, enemy_king)).
+        Pushes the winning king toward the cornered king and avoids stalemate.
+        Gate: opponent_material == 0 (no pieces, no pawns). Replace normal
+        eval completely in this case.
+
+    Threat detection in eval               ~3-6 Elo
+        Award ~15cp per undefended enemy piece attacked by own piece. Penalty
+        ~10cp per own undefended piece attacked by enemy. "Defended" = attacked
+        by any piece of same color. Use existing attack generation. Only MG.
+        Complements king_attack_count; penalizes leaving loose pieces.
+
+    Space advantage                        ~2-5 Elo
+        Count squares behind the opponent's pawn chain that are controlled by
+        own pieces (rank 3-5 for white, 4-6 for black). Bonus = count * 2cp,
+        scaled by how closed the position is (open positions value space less).
+        Closed: few pawn exchanges, many doubled/locked pawns.
 
     --- Infrastructure ---
 
+    Texel tuning (eval weight optimization) ~20-50 Elo
+        Generate a large dataset (100k+ positions from self-play + GM games),
+        evaluate each with quiescence, label with game outcome (1/0/0.5).
+        Minimize MSE of sigmoid(eval/400) vs outcome via gradient descent on
+        all PST values, piece values, and eval weights. Very high effort (~week)
+        but the single largest structural improvement available. Stockfish,
+        Ethereal, and all top engines use this — hand-tuned values always lose.
+
+    Pondering                              ~15-30 Elo
+        Search on the opponent's time using the expected reply (PV[1]).
+        If opponent plays ponder move: "ponderhit" — reuse search, effectively
+        doubles thinking time. If they don't: discard, start fresh.
+        config.yml has ponder: false already. Needs: ponder state tracking,
+        modified search_position() to accept a ponder flag and stop on ponderhit.
+        Main risk: burns CPU between moves; CPX11 has 2 vCPUs so OK with 1 thread.
+
     UCI multipv                            0 Elo (analysis only)
-        Return N best moves. Useful for analysis; no effect on play strength.
+        Return N best moves with separate score lines. Useful for analysis
+        and debugging; zero effect on game strength.
 
 
 Bot Version History:
