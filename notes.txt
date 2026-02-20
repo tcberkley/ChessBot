@@ -35,12 +35,7 @@ Missing Features / To-Do:
 
     --- Search ---
 
-    Singular extensions                    ~10-20 Elo
-        If the TT move at a node is significantly better than all alternatives,
-        extend it by 1 ply. Run a reduced search (depth/2) excluding the TT move
-        with a fail-low window (tt_score - margin). If it fails low, the TT move
-        is singular — extend. Conditions: not root, not already extended, TT depth
-        >= current-3, exact/beta flag, depth >= 8. Margin: 25*depth cp.
+    Singular extensions                    DONE — added to v18 (2026-02-20)
 
     Pondering                              ~20-40 Elo
         Search during the opponent's clock on the expected reply. If the opponent
@@ -275,3 +270,15 @@ Bot Version History:
                        Binary: c_rewrite/v18_engine (compiled with gcc -O3 -march=native -pthread)
                        Deployed: Hetzner CPX11 server (178.156.243.29, Ubuntu 24.04, x86 AMD)
                        as a systemd service with Threads=2. See server_details.txt.
+
+    v18 + SE - singular extensions added (2026-02-20). At non-PV nodes with
+                       depth>=8 and a TT move (exact/beta flag, TT depth>=current-3):
+                       run a reduced search (depth/2) excluding the TT move with a
+                       null window (tt_score - 25*depth - 1, tt_score - 25*depth).
+                       If the result fails low, the TT move is "singular" — extend
+                       it by 1 ply in the main search. Recursion guard: thread-local
+                       se_excluded_move prevents nested SE searches. get_tt_info()
+                       helper reads raw TT flag/depth/score without alpha/beta logic.
+                       Perft still exact (startpos d5=4865609, Kiwipete d4=4085603).
+                       Source: c_rewrite/v18_engine.c (updated in place)
+                       Deployed: Hetzner server recompiled and restarted 2026-02-20.

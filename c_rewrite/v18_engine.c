@@ -1,85 +1,3 @@
-/**********************************\
- ==================================
-           
-             Didactic
-       BITBOARD CHESS ENGINE     
-       
-                by
-                
-         Code Monkey King
-
- ==================================
-\**********************************/
-
-/**********************************\
- ==================================
-
-      THIS ENGINE IS DEDICATED
-    TO HOBBY PROGRAMMERS FACING
-      ISSUES WITH READING CODE
-    OF OPEN SOURCE CHESS ENGINES
-  --------------------------------
-   This engine is incredibly easy
-  to read and understand. It uses
-   global variables everywhere it
-   is possible and sometimes even
- sacrifices performance for clarity
-
- ==================================
-\**********************************/
-
-/**********************************\
- ==================================
-  
-   THIS PROGRAM IS FREE SOFTWARE.
-   IT COMES WITHOUT ANY WARRANTY,
-    TO THE EXTENT PERMITTED BY
-          APPLICABLE LAW.
-         
-   YOU CAN REDISTRIBUTE IT AND/OR
-    MODIFY IT UNDER THE TERMS OF
-  THE DO WHAT THE FUCK YOU WANT TO
-      PUBLIC LICENCE VERSION 2
-     AS PUBLISHED BY SAM HOCEVAR
-      SEE http://www.wtfpl.net/
-          FOR MORE DETAILS
-          
-  --------------------------------
-    Copyright © 2020 Maksim Korzh
-   <freesoft.for.people@gmail.com>
-   
- ==================================
-\**********************************/
-
-/**********************************\
- ==================================
-  
-     DO WHAT THE FUCK YOU WANT
-        TO PUBLIC LICENSE
-  --------------------------------
-     Version 2, December 2004
-  --------------------------------
-    Everyone is permitted to copy
-      and distribute verbatim or
-   modified copies of this license
-    document, and changing it is
-         allowed as long as
-        the name is changed
-  --------------------------------
-      DO WHAT THE FUCK YOU WANT
-         TO PUBLIC LICENSE
-  TERMS AND CONDITIONS FOR COPYING,
-    DISTRIBUTION AND MODIFICATION
-  
-   0. You just DO WHAT THE FUCK
-                 YOU WANT TO.
-  --------------------------------
-   Copyright (C) 2004 Sam Hocevar
-        <sam@hocevar.net>
-   
- ==================================
-\**********************************/
-
 
 // system headers
 #include <stdio.h>
@@ -347,6 +265,9 @@ __thread int fullmove_number;
 
 // v16: halfmove clock for 50-move rule
 __thread int halfmove_clock;
+
+// v18 SE: move excluded from the singular extension verification search (0 = none)
+__thread int se_excluded_move;
 
 
 /**********************************\
@@ -3552,6 +3473,27 @@ static inline int read_hash_entry(int alpha, int beta, int depth, int *tt_best_m
     return NO_HASH_ENTRY;
 }
 
+// Peek at TT entry for singular extension: returns 1 on hit, populates score/flag/depth.
+// Unlike read_hash_entry, no alpha/beta logic — we want raw stored values.
+static inline int get_tt_info(int *out_score, int *out_flag, int *out_depth)
+{
+    tt_cluster *cluster = &hash_table[hash_key & TT_CLUSTER_MASK];
+    unsigned int hash32 = (unsigned int)(hash_key >> 32);
+    for (int i = 0; i < TT_CLUSTER_SIZE; i++) {
+        tt_entry *e = &cluster->entries[i];
+        if (e->hash32 == hash32) {
+            int s = e->score;
+            if (s < -mate_score) s += ply;
+            if (s > mate_score) s -= ply;
+            *out_score = s;
+            *out_flag  = (int)e->flag;
+            *out_depth = (int)(signed char)e->depth;
+            return 1;
+        }
+    }
+    return 0;
+}
+
 // Write TT entry.
 // Replacement policy: prefer to reuse a matching slot (same position);
 // otherwise replace the slot with the lowest depth (least valuable entry).
@@ -4075,13 +4017,34 @@ static inline int negamax(int alpha, int beta, int depth, int null_ok)
     int cm_piece = prev_move_piece;
     int cm_to = prev_move_to;
 
+    // v18: Singular extension — if the TT move is the only good move at this node, extend it.
+    // Conditions: non-PV, depth>=8, have a TT move, not in check, not at root,
+    // not already inside an SE search (se_excluded_move!=0), TT entry is reliable.
+    int se_extension = 0;
+    if (!pv_node && depth >= 8 && tt_best_move && !in_check && ply > 0
+        && !se_excluded_move) {
+        int se_tt_score, se_tt_flag, se_tt_depth;
+        if (get_tt_info(&se_tt_score, &se_tt_flag, &se_tt_depth)
+            && se_tt_depth >= depth - 3
+            && (se_tt_flag == HASH_FLAG_EXACT || se_tt_flag == HASH_FLAG_BETA)
+            && se_tt_score > -mate_score && se_tt_score < mate_score) {
+            int se_beta = se_tt_score - 25 * depth;
+            se_excluded_move = tt_best_move;
+            int se_score = negamax(se_beta - 1, se_beta, depth / 2, 0);
+            se_excluded_move = 0;
+            if (!v14_stopped && se_score < se_beta)
+                se_extension = 1;
+        }
+    }
+
     int legal_moves_count = 0;
     int best_score = -infinity;
     int best_move = 0;
     int hash_flag = HASH_FLAG_ALPHA;
 
     // v18: Try TT move first before generating all moves (saves generate_moves on TT cutoffs)
-    if (tt_best_move) {
+    // Skip if this move is excluded (we are inside the SE verification search for it).
+    if (tt_best_move && tt_best_move != se_excluded_move) {
         copy_board();
         ply++;
         repetition_index++;
@@ -4095,7 +4058,7 @@ static inline int negamax(int alpha, int beta, int depth, int null_ok)
                             !get_move_capture(tt_best_move) && !get_move_promoted(tt_best_move);
             int tt_score;
             if (!futile_tt) {
-                tt_score = -negamax(-beta, -alpha, depth - 1, 1);
+                tt_score = -negamax(-beta, -alpha, depth - 1 + se_extension, 1);
             } else {
                 tt_score = alpha;  // skip futile TT quiet moves too
             }
@@ -4157,7 +4120,8 @@ static inline int negamax(int alpha, int beta, int depth, int null_ok)
 
     for (int count = 0; count < move_list->count; count++) {
         int move = move_list->moves[count];
-        if (move == tt_best_move) continue;  // already tried in pre-try stage
+        if (move == tt_best_move) continue;       // already tried in pre-try stage
+        if (move == se_excluded_move) continue;   // excluded from SE verification search
         int is_capture = get_move_capture(move);
         int is_promotion = get_move_promoted(move);
 
@@ -4369,6 +4333,7 @@ static void* worker_thread(void* arg) {
     nodes = 0;
     prev_move_piece = 0;
     prev_move_to = 0;
+    se_excluded_move = 0;
     memset(pv_table, 0, sizeof(pv_table));
     memset(pv_length, 0, sizeof(pv_length));
 
@@ -4404,6 +4369,7 @@ void search_position(int max_depth, int time_budget_ms)
     memset(pv_length, 0, sizeof(pv_length));
     prev_move_piece = 0;
     prev_move_to = 0;
+    se_excluded_move = 0;
 
     // Save board state for worker threads and spawn them
     pthread_t worker_threads[MAX_THREADS];
