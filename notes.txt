@@ -1,6 +1,6 @@
 Lichess Bot Setup:
     - Account: tombot1234
-    - Engine: v15_engine (UCI protocol)
+    - Engine: v18_engine (UCI protocol)
     - Config: lichess-bot-master/config.yml
     - Time controls: blitz, rapid, classical
     - Matchmaking: auto-challenges other bots every 1 min; offers rematch after a win
@@ -12,11 +12,11 @@ Running the Bot:
     # Compile all C engines (only needed once, or after code changes):
     cd c_rewrite && make
 
-    # Run the Lichess bot (config points to v15):
+    # Run the Lichess bot (config points to v18):
     cd lichess-bot-master && python lichess-bot.py
 
     # Test the engine directly via UCI:
-    echo -e "uci\nisready\nposition startpos moves e2e4 e7e5\ngo depth 10\nquit" | ./c_rewrite/v15_engine
+    echo -e "uci\nisready\nposition startpos moves e2e4 e7e5\ngo depth 10\nquit" | ./c_rewrite/v18_engine
 
     # Run tournament at fixed depth:
     python tests/uci_tournament.py --engine1 c_rewrite/v14_engine --engine2 c_rewrite/v15_engine --positions 15 --depth 10
@@ -31,18 +31,16 @@ Running the Bot:
 
 
 Missing Features / To-Do:
-    Ranked by estimated Elo gain. Ranges are rough — 30-game samples have wide CIs.
-    Items marked DONE were implemented in v16.
+    Ranked by estimated Elo gain. Ranges are rough — small samples have wide CIs.
 
     --- Search ---
 
-    Check extensions                       DONE (already in v15)
-        When the side to move is in check, extend the search by 1 ply. Prevents
-        missing forced sequences that begin with a check.
-
-    50-move rule / draw detection          DONE (v16)
-        Halfmove clock now parsed and tracked; engine returns draw score at 100.
-        Insufficient material detection (KK, KBK, KNK) also returns 0.
+    Singular extensions                    ~10-20 Elo
+        If the TT move at a node is significantly better than all alternatives,
+        extend it by 1 ply. Run a reduced search (depth/2) excluding the TT move
+        with a fail-low window (tt_score - margin). If it fails low, the TT move
+        is singular — extend. Conditions: not root, not already extended, TT depth
+        >= current-3, exact/beta flag, depth >= 8. Margin: 25*depth cp.
 
     Pondering                              ~20-40 Elo
         Search during the opponent's clock on the expected reply. If the opponent
@@ -50,119 +48,52 @@ Missing Features / To-Do:
         doubles thinking time for free. Complicates time management; config.yml
         already has ponder: false ready to flip.
 
-    Score instability / time extension     DONE (v16)
-        If best move is stable for 3+ depths with small score swing, exit search
-        early once past 40% of time budget. (Time-controlled mode only.)
+    Staged move generation                 ~5-10 Elo (speed)
+        TT pre-try is already in place. Next step: generate captures only first,
+        then killers + quiets. If any capture causes a cutoff, quiets are never
+        generated. Requires splitting generate_moves() into capture/quiet phases.
 
-    Singular extensions                    ~10-20 Elo
-        If the TT move at a node is significantly better than all alternatives
-        (margin test against reduced search), extend it by 1 ply. Complex to
-        implement correctly without causing search explosions.
+    Null move verification search          ~3-6 Elo
+        At high depths (depth >= 12), after a null-move cutoff verify with a
+        reduced search to avoid false prunes in zugzwang positions. Low priority
+        since zugzwang is rare in open positions.
 
-    Internal Iterative Deepening (IID)     DONE (v16)
-        At PV nodes with no TT move and depth >= 5, run a depth-2 shallow search
-        first for move ordering.
-
-    Aspiration window gradual widening     DONE (v16)
-        On aspiration failure, widen gradually (±50 → ±150 → ±450 → full)
-        instead of jumping straight to a full-width re-search.
+    Better time management                 ~5-10 Elo
+        Scale time budget by position complexity: use more time when score has
+        shifted sharply between iterations (instability already detected — could
+        extend budget instead of just blocking easy-move exit). Use less time
+        in clearly winning/losing positions.
 
     --- Evaluation ---
 
-    Rook behind passed pawn                DONE (v16)
-        +20 bonus when a rook is behind its own passed pawn on the same file.
-
-    Pawn shield quality                    DONE (v16)
-        Replaced flat shield count with quality scoring: +15 for immediate pawn,
-        +8 for one step advanced. Only counts pawns directly in front of king
-        (not same-rank adjacent pawns).
-
-    50-move / insufficient material eval   DONE (v16)
-        Eval returns 0 for KK, KBK, KNK configurations.
-
-    Tempo / side-to-move bonus             DONE (v17)
-        +10cp added to static_eval in negamax futility block only (NOT in
-        quiescence). Correctly avoids the v16 stand_pat bug.
-
-    Connected rooks                        DONE (v16)
-        +15 bonus for two rooks on the same open file or rank (no pieces between).
-
-    Pawn islands                           DONE (v16)
-        -8 cp per extra island beyond the first.
-
-    King mobility in endgame               DONE (v16)
-        +3 cp per safe king move in endgame phase.
+    Texel tuning (eval weight optimization) ~10-30 Elo
+        Use a dataset of engine self-play or GM games to tune all PST values and
+        eval weights via gradient descent. High implementation effort but the
+        highest potential single-step gain. Stockfish, Ethereal all use this.
 
     Candidate passed pawns                 ~5-10 Elo
-        Pawns that could become passed with the right pawn exchanges. Initial
-        implementation removed — too error-prone without proper forward-only
-        support counting.
+        Pawns that could become passed given the right pawn exchanges. Only fire
+        when enemy_ahead_count == 1 and friendly_support_count >= 1. Give ~25%
+        of the passed pawn bonus. Stricter than the v16 attempt that was removed.
 
     Weak squares / holes                   ~5-10 Elo
-        Squares that can never be defended by a pawn again (after pawn advances)
-        invite enemy piece occupation. Especially dangerous near the king.
+        Squares that can never be controlled by own pawns again penalize piece
+        activity. Simplified version: penalize enemy knights sitting on squares
+        not attackable by any own pawn (-20 cp per such knight).
 
+    Threat detection in eval               ~5-8 Elo
+        Reward positions where own pieces attack undefended enemy pieces; penalize
+        positions where opponent has threats. Complements king attack count scoring.
+
+    Endgame knowledge                      ~3-8 Elo
+        KPK opposition logic (can king reach queening square before pawn),
+        rook + pawn vs rook technique hints, mop-up eval improvements for
+        queen/rook vs lone king. Currently relies on Lichess 7-piece tablebase.
 
     --- Infrastructure ---
 
-
     UCI multipv                            0 Elo (analysis only)
         Return N best moves. Useful for analysis; no effect on play strength.
-
-    UCI go movetime                        DONE (already in v16)
-        Parsing confirmed present in v16/v17. Correctly sets time_budget_ms.
-
-    SEE (Static Exchange Evaluation)       DONE (v17)
-        Swap algorithm. Used in capture ordering and qsearch filter.
-
-    King attack count scoring              DONE (v17)
-        Danger weights Q=5,R=3,B/N=2,P=1. Penalty = danger²/4 capped 150cp.
-
-    Adaptive null move R                   DONE (v17)
-        R = 3 + depth/6 instead of fixed R=3.
-
-    Countermove heuristic                  DONE (v17)
-        Indexed by opponent's last move (piece, to_sq). Score: 700k.
-
-    History malus + gravity                DONE (v17)
-        Malus for quiet moves that fail. Gravity scaling prevents overflow.
-
-    Bad bishop penalty                     DONE (v17)
-        -5 cp per own pawn on same color squares as bishop.
-
-    Pawn hash table                        DONE (v18)
-        8192-entry table keyed on pawn bitboard fingerprint. Caches pawn
-        structure score + passed pawn bitboard for both sides. pawn_eval_side()
-        extracted from evaluate_side(); evaluate() probes/fills on every call.
-        Phase-staleness accepted (small approximation, <15cp error).
-
-    Lazy evaluation                        DONE (v18)
-        Material-only estimate (P=100,N=320,B=330,R=500,Q=900) checked before
-        full evaluate() in quiescence. If lazy ± 350cp is outside [alpha,beta],
-        skip the full eval. Saves expensive eval calls at qsearch leaves.
-
-    Probcut                                DONE (v18)
-        At non-PV nodes depth>=5, not in check: generates captures, filters by
-        SEE >= beta+200-beta-1 (SEE >= 199), runs depth-4 null-window search
-        with window (pc_beta-1, pc_beta). Prunes if any capture exceeds pc_beta.
-
-    Capture history                        DONE (v18)
-        capture_history[attacker][to_sq][captured_piece]. Updated on capture
-        beta-cutoffs (gravity: bonus - h*bonus/16384). Used as ±400cp tiebreaker
-        within SEE score groups in score_move() for better capture ordering.
-
-    Continuation history (1-ply)           DONE (v18)
-        cont_hist[prev_piece][prev_to][cur_piece][cur_to] as short (1.15MB).
-        Added to quiet move score alongside history heuristic. Updated on quiet
-        beta-cutoffs using gravity formula (clamped to short range).
-
-    TT move pre-try                        DONE (v18)
-        TT move is tried before generate_moves() is called. On beta-cutoff,
-        returns immediately without generating any moves (saves ~20 movegen ops
-        per TT cutoff). Main move loop skips TT move via continue.
-
-    Singular extensions                    ~10-20 Elo
-        Run reduced search excluding TT move; if it fails low, extend TT move.
 
 
 Bot Version History:
@@ -254,28 +185,29 @@ Bot Version History:
                        Source: c_rewrite/v15_engine.c
                        Binary: c_rewrite/v15_engine (compiled with gcc -O3 -march=native)
 
-    v18 - efficiency and search improvements on top of v17. Search: TT move
-                       pre-tried before generate_moves() — on beta-cutoff returns
-                       immediately, saving ~20 move-generation ops per TT cutoff;
-                       probcut at non-PV nodes depth>=5 (captures with SEE>=199
-                       searched at depth-4 with window beta+200; prune if cutoff).
-                       Eval: pawn hash table (8192-entry, keyed on pawn bitboard
-                       fingerprint, caches pawn structure score + passed pawn bb
-                       for both sides — saves ~30-40% of eval cost per node);
-                       lazy evaluation in quiescence (material-only estimate
-                       ±350cp guards before full evaluate() — skips expensive
-                       eval at leaves where outcome is clear). Move ordering:
-                       capture history (capture_history[attacker][to][captured],
-                       gravity update, ±400cp tiebreaker in SEE groups);
-                       1-ply continuation history (cont_hist[prev_p][prev_to]
-                       [cur_p][cur_to] as short, 1.15MB, gravity update, added
-                       to quiet move score). Benchmark vs v17: +2 effective
-                       search depth in 1s on Kiwipete (v18 reaches d12 in 728ms
-                       vs v17 d10 in 264ms — v17 exits early via easy-move
-                       heuristic). 10-game movetime-100ms tournament vs v17:
-                       v18 60.0% (4W / 2L / 4D), estimated +70 Elo (wide CI).
-                       Source: c_rewrite/v18_engine.c
-                       Binary: c_rewrite/v18_engine (compiled with gcc -O3 -march=native)
+    v16 - search and evaluation improvements on top of v15. Search: 50-move rule
+                       (halfmove clock now parsed and tracked; draw returned at >=100
+                       half-moves), aspiration window gradual widening (±50 → ±150 →
+                       ±450 → full on failure instead of jumping straight to full),
+                       score instability / easy-move detection (exit search early if
+                       best move stable 3+ depths with swing <30cp and past 40% of
+                       budget), Internal Iterative Deepening (at PV nodes with no TT
+                       hit and depth>=5, run depth-2 shallow search for move ordering).
+                       Eval: rook behind passed pawn (+20), pawn shield quality scoring
+                       (rank_dist=1: +15, rank_dist=2: +8, replaces flat shield count),
+                       connected rooks (+15 if two rooks share clear file or rank),
+                       pawn islands penalty (-8 per island beyond the first), king
+                       mobility in endgame (+3 per safe move), insufficient material
+                       draw detection (KK, KBK, KNK → 0). NOTE: tempo bonus (+10 for
+                       side to move) was implemented and removed — adding it inside
+                       evaluate() breaks quiescence: stand_pat gets +10 but captures
+                       don't, so the engine rejects any capture worth <20cp. Candidate
+                       passed pawns were also attempted but removed — the support-count
+                       logic was too broad. 30-game fixed-depth test (depth 10) vs v15:
+                       approximately equal (+9 =12 -8 for v15, 51.7%). Node ratio
+                       0.97x v15 — features add search complexity but pruning offsets.
+                       Source: c_rewrite/v16_engine.c
+                       Binary: c_rewrite/v16_engine (compiled with gcc -O3 -march=native)
                        Deployed: Hetzner CPX11 server (178.156.243.29, Ubuntu 24.04, x86 AMD)
                        as a systemd service. See server_details.txt for full deployment info.
 
@@ -304,7 +236,6 @@ Bot Version History:
                        vs v16 single-entry: 23% fewer nodes searched (1,054k vs 1,370k).
                        Estimated +0.5–1 ply effective search depth; no separate Elo
                        test run (node reduction is structural, not Elo-tested directly).
-                       Pawn hash table deferred to v18 (requires evaluate_side refactor).
                        50-game movetime-100ms tournament vs v16: v17 56.0%
                        (17W / 11L / 22D), estimated +42 Elo.
                        Source: c_rewrite/v17_engine.c
@@ -312,28 +243,35 @@ Bot Version History:
                        Deployed: Hetzner CPX11 server (178.156.243.29, Ubuntu 24.04, x86 AMD)
                        as a systemd service. See server_details.txt for full deployment info.
 
-    v16 - search and evaluation improvements on top of v15. Search: 50-move rule
-                       (halfmove clock now parsed and tracked; draw returned at >=100
-                       half-moves), aspiration window gradual widening (±50 → ±150 →
-                       ±450 → full on failure instead of jumping straight to full),
-                       score instability / easy-move detection (exit search early if
-                       best move stable 3+ depths with swing <30cp and past 40% of
-                       budget), Internal Iterative Deepening (at PV nodes with no TT
-                       hit and depth>=5, run depth-2 shallow search for move ordering).
-                       Eval: rook behind passed pawn (+20), pawn shield quality scoring
-                       (rank_dist=1: +15, rank_dist=2: +8, replaces flat shield count),
-                       connected rooks (+15 if two rooks share clear file or rank),
-                       pawn islands penalty (-8 per island beyond the first), king
-                       mobility in endgame (+3 per safe move), insufficient material
-                       draw detection (KK, KBK, KNK → 0). NOTE: tempo bonus (+10 for
-                       side to move) was implemented and removed — adding it inside
-                       evaluate() breaks quiescence: stand_pat gets +10 but captures
-                       don't, so the engine rejects any capture worth <20cp. Candidate
-                       passed pawns were also attempted but removed — the support-count
-                       logic was too broad. 30-game fixed-depth test (depth 10) vs v15:
-                       approximately equal (+9 =12 -8 for v15, 51.7%). Node ratio
-                       0.97x v15 — features add search complexity but pruning offsets.
-                       Source: c_rewrite/v16_engine.c
-                       Binary: c_rewrite/v16_engine (compiled with gcc -O3 -march=native)
+    v18 - efficiency and search improvements on top of v17. Search: TT move
+                       pre-tried before generate_moves() — on beta-cutoff returns
+                       immediately, saving ~20 move-generation ops per TT cutoff;
+                       probcut at non-PV nodes depth>=5 (captures with SEE>=199
+                       searched at depth-4 with window beta+200; prune if cutoff).
+                       Eval: pawn hash table (8192-entry, keyed on pawn bitboard
+                       fingerprint, caches pawn structure score + passed pawn bb
+                       for both sides — saves ~30-40% of eval cost per node);
+                       lazy evaluation in quiescence (material-only estimate
+                       ±350cp guards before full evaluate() — skips expensive
+                       eval at leaves where outcome is clear). Move ordering:
+                       capture history (capture_history[attacker][to][captured],
+                       gravity update, ±400cp tiebreaker in SEE groups);
+                       1-ply continuation history (cont_hist[prev_p][prev_to]
+                       [cur_p][cur_to] as short, 1.15MB, gravity update, added
+                       to quiet move score). Benchmark vs v17: +2 effective
+                       search depth in 1s on Kiwipete (v18 reaches d12 in 728ms
+                       vs v17 d10 in 264ms — v17 exits early via easy-move
+                       heuristic). 10-game movetime-100ms tournament vs v17:
+                       v18 60.0% (4W / 2L / 4D), estimated +70 Elo (wide CI).
+                       Threading: Lazy SMP via pthreads — board state and PV
+                       tables are __thread (thread-local); TT, history, killer,
+                       cont_hist shared with benign races (standard practice).
+                       Worker threads staggered by thread_id depth offset to
+                       maximize TT diversity. Threads UCI option default 1;
+                       server runs with Threads=2 (both CPX11 vCPUs). Local
+                       benchmark: depth 10 (1 thread) → depth 12 (4 threads) in
+                       1s on Kiwipete. Makefile adds -pthread to v18 target.
+                       Source: c_rewrite/v18_engine.c
+                       Binary: c_rewrite/v18_engine (compiled with gcc -O3 -march=native -pthread)
                        Deployed: Hetzner CPX11 server (178.156.243.29, Ubuntu 24.04, x86 AMD)
-                       as a systemd service. See server_details.txt for full deployment info.
+                       as a systemd service with Threads=2. See server_details.txt.

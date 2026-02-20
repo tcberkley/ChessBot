@@ -21,7 +21,7 @@ v17_engine: v17_engine.c
 	$(CC) $(V14FLAGS) -o v17_engine v17_engine.c $(LDFLAGS)
 
 v18_engine: v18_engine.c
-	$(CC) $(V14FLAGS) -o v18_engine v18_engine.c $(LDFLAGS)
+	$(CC) $(V14FLAGS) -pthread -o v18_engine v18_engine.c $(LDFLAGS)
 
 clean:
 	rm -f v13_engine v14_engine v15_engine v16_engine v17_engine v18_engine

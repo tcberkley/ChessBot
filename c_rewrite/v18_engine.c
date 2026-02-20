@@ -87,6 +87,7 @@
 #include <string.h>
 #include <math.h>
 #include <unistd.h>
+#include <pthread.h>
 #ifdef WIN64
     #include <windows.h>
 #else
@@ -296,40 +297,56 @@ char promoted_pieces[] = {
 
 */
 
+// Lazy SMP: number of search threads
+int num_threads = 1;
+#define MAX_THREADS 8
+
+// Master board state — copied to each worker thread at search start
+static U64  master_bitboards[12];
+static U64  master_occupancies[3];
+static int  master_side, master_enpassant, master_castle;
+static U64  master_hash_key;
+static U64  master_repetition_table[1000];
+static int  master_repetition_index;
+static int  master_ply;
+static int  master_has_castled[2];
+static int  master_fullmove_number;
+static int  master_halfmove_clock;
+
 // piece bitboards
-U64 bitboards[12];
+__thread U64 bitboards[12];
 
 // occupancy bitboards
-U64 occupancies[3];
+__thread U64 occupancies[3];
 
 
 // side to move
-int side;
+__thread int side;
 
 // enpassant square
-int enpassant = no_sq; 
+__thread int enpassant;
 
 // castling rights
-int castle;
+__thread int castle;
 
 // "almost" unique position identifier aka hash key or position key
-U64 hash_key;
+__thread U64 hash_key;
 
 // positions repetition table
-U64 repetition_table[1000];  // 1000 is a number of plies (500 moves) in the entire game
+__thread U64 repetition_table[1000];  // 1000 is a number of plies (500 moves) in the entire game
 
 // repetition index
-int repetition_index;
+__thread int repetition_index;
 
 // half move counter
-int ply;
+__thread int ply;
 
 // v12 additions: castling tracking and fullmove number
-int has_castled[2]; // has_castled[white], has_castled[black]
-int fullmove_number = 1;
+__thread int has_castled[2]; // has_castled[white], has_castled[black]
+__thread int fullmove_number;
 
 // v16: halfmove clock for 50-move rule
-int halfmove_clock = 0;
+__thread int halfmove_clock;
 
 
 /**********************************\
@@ -2585,7 +2602,7 @@ static inline void generate_moves(moves *move_list)
 \**********************************/
 
 // leaf nodes (number of positions reached during the test of the move generator at a given depth)
-U64 nodes;
+__thread U64 nodes;
 
 // perft driver
 static inline void perft_driver(int depth)
@@ -3605,8 +3622,8 @@ int history_moves[12][64];
 int countermove[12][64];
 
 // Previous move tracking for countermove (piece that moved and its destination)
-int prev_move_piece = 0;
-int prev_move_to = 0;
+__thread int prev_move_piece;
+__thread int prev_move_to;
 
 // Capture history [attacker_piece][to_sq][captured_piece]
 int capture_history[12][64][12];
@@ -3615,8 +3632,8 @@ int capture_history[12][64][12];
 short cont_hist[12][64][12][64];
 
 // PV table
-int pv_length[max_ply];
-int pv_table[max_ply][max_ply];
+__thread int pv_length[max_ply];
+__thread int pv_table[max_ply][max_ply];
 
 // Pre-computed LMR reduction table
 int lmr_table[64][64];
@@ -4298,6 +4315,69 @@ static int allocate_time(int my_time_ms, int my_inc_ms, int move_number)
     return budget;
 }
 
+// Save main-thread board state into master snapshot for worker threads
+static void save_board_to_master(void) {
+    memcpy(master_bitboards, bitboards, sizeof(bitboards));
+    memcpy(master_occupancies, occupancies, sizeof(occupancies));
+    master_side = side;
+    master_enpassant = enpassant;
+    master_castle = castle;
+    master_hash_key = hash_key;
+    memcpy(master_repetition_table, repetition_table, sizeof(repetition_table));
+    master_repetition_index = repetition_index;
+    master_ply = ply;
+    memcpy(master_has_castled, has_castled, sizeof(has_castled));
+    master_fullmove_number = fullmove_number;
+    master_halfmove_clock = halfmove_clock;
+}
+
+// Copy master board state into the calling thread's TLS board state
+static void copy_master_to_thread(void) {
+    memcpy(bitboards, master_bitboards, sizeof(bitboards));
+    memcpy(occupancies, master_occupancies, sizeof(occupancies));
+    side = master_side;
+    enpassant = master_enpassant;
+    castle = master_castle;
+    hash_key = master_hash_key;
+    memcpy(repetition_table, master_repetition_table, sizeof(repetition_table));
+    repetition_index = master_repetition_index;
+    ply = master_ply;
+    memcpy(has_castled, master_has_castled, sizeof(has_castled));
+    fullmove_number = master_fullmove_number;
+    halfmove_clock = master_halfmove_clock;
+}
+
+typedef struct {
+    int thread_id;
+    int max_depth;
+} WorkerArgs;
+
+static void* worker_thread(void* arg) {
+    WorkerArgs* args = (WorkerArgs*)arg;
+
+    // Initialize this thread's board state from master
+    copy_master_to_thread();
+
+    // Per-thread search state reset
+    nodes = 0;
+    prev_move_piece = 0;
+    prev_move_to = 0;
+    memset(pv_table, 0, sizeof(pv_table));
+    memset(pv_length, 0, sizeof(pv_length));
+
+    int game_phase = get_game_phase();
+
+    // Stagger starting depth by thread_id so threads explore different subtrees
+    for (int current_depth = 1 + args->thread_id;
+         current_depth <= args->max_depth && !stopped && !v14_stopped;
+         current_depth++) {
+        int search_depth = (game_phase < PHASE_THRESHOLD) ? current_depth + 1 : current_depth;
+        negamax(-infinity, infinity, search_depth, 1);
+    }
+
+    return NULL;
+}
+
 // Search position: iterative deepening with aspiration windows
 void search_position(int max_depth, int time_budget_ms)
 {
@@ -4317,6 +4397,18 @@ void search_position(int max_depth, int time_budget_ms)
     memset(pv_length, 0, sizeof(pv_length));
     prev_move_piece = 0;
     prev_move_to = 0;
+
+    // Save board state for worker threads and spawn them
+    pthread_t worker_threads[MAX_THREADS];
+    WorkerArgs worker_args[MAX_THREADS];
+    if (num_threads > 1) {
+        save_board_to_master();
+        for (int i = 1; i < num_threads; i++) {
+            worker_args[i].thread_id = i;
+            worker_args[i].max_depth = max_depth;
+            pthread_create(&worker_threads[i], NULL, worker_thread, &worker_args[i]);
+        }
+    }
 
     int score = 0;
     int alpha = -infinity;
@@ -4434,6 +4526,13 @@ void search_position(int max_depth, int time_budget_ms)
     }
 
 done:
+    // Stop and join worker threads
+    if (num_threads > 1) {
+        stopped = 1;  // ensure workers exit
+        for (int i = 1; i < num_threads; i++)
+            pthread_join(worker_threads[i], NULL);
+    }
+
     // Print best move (use saved move, not pv_table which may be from incomplete depth)
     printf("bestmove ");
     if (best_move_found)
@@ -4689,12 +4788,22 @@ void uci_loop()
         if (strncmp(input, "stop", 4) == 0)
             continue;  // No-op when not searching
 
-        if (strncmp(input, "setoption", 9) == 0)
-            continue;  // Ignore options we don't support
+        if (strncmp(input, "setoption", 9) == 0) {
+            if (strstr(input, "name Threads value")) {
+                char *val = strstr(input, "value");
+                if (val) {
+                    int t = atoi(val + 6);
+                    if (t >= 1 && t <= MAX_THREADS)
+                        num_threads = t;
+                }
+            }
+            continue;
+        }
 
         if (strncmp(input, "uci", 3) == 0) {
-            printf("id name v16\n");
+            printf("id name v18\n");
             printf("id author tomberkley\n");
+            printf("option name Threads type spin default 1 min 1 max %d\n", MAX_THREADS);
             printf("uciok\n");
             fflush(stdout);
         }
