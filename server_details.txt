@@ -23,7 +23,7 @@
 * **Bridge Directory:** `lichess-bot-master/` (Python wrapper, config.yml, requirements.txt)
 
 ## 4. Current Deployment State (as of 2026-02-20)
-* Engine: **v17_engine**, compiled natively on server with `gcc -O3 -march=native`
+* Engine: **v18_engine**, compiled natively on server with `gcc -O3 -march=native`
 * Bot running as systemd service (auto-restarts on crash, starts on reboot)
 * Matchmaking: `opponent_min_rating: 1700`, `rating_preference: "high"`
 * Incoming challenge filter: `extra_game_handlers.py` rejects challengers rated below 1700
@@ -59,7 +59,7 @@ scp -r /Users/tomberkley/Desktop/CodeProjects/Chess/c_rewrite \
 
 ### B. Recompile engine on server (REQUIRED — do not run the Mac binary on Linux)
 ```bash
-ssh root@178.156.243.29 "cd ~/c_rewrite && make clean && make v17_engine"
+ssh root@178.156.243.29 "cd ~/c_rewrite && make clean && make v18_engine"
 ```
 
 ### C. Restart the service
@@ -80,6 +80,6 @@ ssh root@178.156.243.29 "journalctl -u lichess-bot -n 20 --no-pager"
 * **Venv must be built with python3.12** — use `python3.12 -m venv venv`, not `python3 -m venv`,
   to avoid mixed-version symlink issues.
 * **Orphaned engine processes** — if killing the bot with pkill, also check for lingering
-  v17_engine processes: `pgrep -a v17_engine` and kill manually if found.
+  v18_engine processes: `pgrep -a v18_engine` and kill manually if found.
 * **Token not in config.yml** — the API token lives in `.env`, not config.yml (which is gitignored).
   The systemd service reads it via `EnvironmentFile=/root/lichess-bot-master/.env`.

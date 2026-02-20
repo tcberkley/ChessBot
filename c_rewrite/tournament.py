@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Tournament: v17_engine vs v16_engine
+Tournament: v18_engine vs v17_engine
 Plays N games with alternating colors using go movetime UCI protocol.
 Uses python-chess for move validation and game-end detection.
 """
@@ -130,17 +130,16 @@ def play_game(white_engine, black_engine, opening_moves):
 
 
 def main():
-    n_games = 50
-    print(f"Tournament: v17_engine vs v16_engine")
+    n_games = 10
+    print(f"Tournament: v18_engine vs v17_engine")
     print(f"Games: {n_games} | Movetime: {MOVETIME_MS}ms/move | Max moves: {MAX_MOVES}")
     print("-" * 60)
 
+    v18_wins = 0
     v17_wins = 0
-    v16_wins = 0
     draws = 0
 
-    # We play pairs: v17 as white, v16 as black; then swap
-    # Total pairs = n_games // 2, each opening repeated once per color
+    # We play pairs: v18 as white, v17 as black; then swap
     pairs = n_games // 2  # 25 pairs → 50 games
 
     start_total = time.time()
@@ -148,32 +147,32 @@ def main():
     for pair_idx in range(pairs):
         opening = OPENINGS[pair_idx % len(OPENINGS)]
 
-        for v17_color in [chess.WHITE, chess.BLACK]:
+        for v18_color in [chess.WHITE, chess.BLACK]:
             # Start fresh engines for each game (avoids state leakage)
+            e18 = start_engine("v18_engine")
             e17 = start_engine("v17_engine")
-            e16 = start_engine("v16_engine")
 
-            if v17_color == chess.WHITE:
-                result = play_game(e17, e16, opening)
-                winner = "v17" if result == "white" else ("v16" if result == "black" else "draw")
+            if v18_color == chess.WHITE:
+                result = play_game(e18, e17, opening)
+                winner = "v18" if result == "white" else ("v17" if result == "black" else "draw")
             else:
-                result = play_game(e16, e17, opening)
-                winner = "v17" if result == "black" else ("v16" if result == "white" else "draw")
+                result = play_game(e17, e18, opening)
+                winner = "v18" if result == "black" else ("v17" if result == "white" else "draw")
 
+            e18.stdin.write("quit\n"); e18.stdin.flush()
             e17.stdin.write("quit\n"); e17.stdin.flush()
-            e16.stdin.write("quit\n"); e16.stdin.flush()
+            e18.wait(timeout=2)
             e17.wait(timeout=2)
-            e16.wait(timeout=2)
 
-            game_num = pair_idx * 2 + (0 if v17_color == chess.WHITE else 1) + 1
-            color_str = "v17=W" if v17_color == chess.WHITE else "v17=B"
+            game_num = pair_idx * 2 + (0 if v18_color == chess.WHITE else 1) + 1
+            color_str = "v18=W" if v18_color == chess.WHITE else "v18=B"
 
-            if winner == "v17":
+            if winner == "v18":
+                v18_wins += 1
+                outcome = "v18 wins"
+            elif winner == "v17":
                 v17_wins += 1
                 outcome = "v17 wins"
-            elif winner == "v16":
-                v16_wins += 1
-                outcome = "v16 wins"
             else:
                 draws += 1
                 outcome = "Draw"
@@ -182,21 +181,21 @@ def main():
             sys.stdout.flush()
 
     elapsed = time.time() - start_total
-    total_games = v17_wins + v16_wins + draws
+    total_games = v18_wins + v17_wins + draws
 
     print("\n" + "=" * 60)
     print(f"RESULTS after {total_games} games ({elapsed:.1f}s)")
+    print(f"  v18 wins:  {v18_wins:3d}  ({100*v18_wins/total_games:.1f}%)")
     print(f"  v17 wins:  {v17_wins:3d}  ({100*v17_wins/total_games:.1f}%)")
-    print(f"  v16 wins:  {v16_wins:3d}  ({100*v16_wins/total_games:.1f}%)")
     print(f"  Draws:     {draws:3d}  ({100*draws/total_games:.1f}%)")
-    score = (v17_wins + 0.5 * draws) / total_games
-    print(f"  v17 score: {score:.3f}  ({score*100:.1f}%)")
+    score = (v18_wins + 0.5 * draws) / total_games
+    print(f"  v18 score: {score:.3f}  ({score*100:.1f}%)")
 
     # Rough Elo estimate using logistic model
     if score > 0 and score < 1:
         import math
         elo_diff = -400 * math.log10(1/score - 1)
-        print(f"  Est. Elo diff: {elo_diff:+.0f} cp (v17 vs v16)")
+        print(f"  Est. Elo diff: {elo_diff:+.0f} Elo (v18 vs v17)")
     print("=" * 60)
 
 

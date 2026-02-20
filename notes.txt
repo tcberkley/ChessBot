@@ -130,14 +130,39 @@ Missing Features / To-Do:
     Bad bishop penalty                     DONE (v17)
         -5 cp per own pawn on same color squares as bishop.
 
-    Pawn hash table                        ~10-20 Elo (v18)
-        Deferred: requires evaluate_side refactor to return own_passed_bb.
+    Pawn hash table                        DONE (v18)
+        8192-entry table keyed on pawn bitboard fingerprint. Caches pawn
+        structure score + passed pawn bitboard for both sides. pawn_eval_side()
+        extracted from evaluate_side(); evaluate() probes/fills on every call.
+        Phase-staleness accepted (small approximation, <15cp error).
+
+    Lazy evaluation                        DONE (v18)
+        Material-only estimate (P=100,N=320,B=330,R=500,Q=900) checked before
+        full evaluate() in quiescence. If lazy ± 350cp is outside [alpha,beta],
+        skip the full eval. Saves expensive eval calls at qsearch leaves.
+
+    Probcut                                DONE (v18)
+        At non-PV nodes depth>=5, not in check: generates captures, filters by
+        SEE >= beta+200-beta-1 (SEE >= 199), runs depth-4 null-window search
+        with window (pc_beta-1, pc_beta). Prunes if any capture exceeds pc_beta.
+
+    Capture history                        DONE (v18)
+        capture_history[attacker][to_sq][captured_piece]. Updated on capture
+        beta-cutoffs (gravity: bonus - h*bonus/16384). Used as ±400cp tiebreaker
+        within SEE score groups in score_move() for better capture ordering.
+
+    Continuation history (1-ply)           DONE (v18)
+        cont_hist[prev_piece][prev_to][cur_piece][cur_to] as short (1.15MB).
+        Added to quiet move score alongside history heuristic. Updated on quiet
+        beta-cutoffs using gravity formula (clamped to short range).
+
+    TT move pre-try                        DONE (v18)
+        TT move is tried before generate_moves() is called. On beta-cutoff,
+        returns immediately without generating any moves (saves ~20 movegen ops
+        per TT cutoff). Main move loop skips TT move via continue.
 
     Singular extensions                    ~10-20 Elo
         Run reduced search excluding TT move; if it fails low, extend TT move.
-
-    Probcut                                ~5-8 Elo
-        At non-PV nodes depth>=5: depth-4 search with wide window to prune.
 
 
 Bot Version History:
@@ -228,6 +253,31 @@ Bot Version History:
                        Reaching depth 15-18 in blitz (vs v13's depth 16).
                        Source: c_rewrite/v15_engine.c
                        Binary: c_rewrite/v15_engine (compiled with gcc -O3 -march=native)
+
+    v18 - efficiency and search improvements on top of v17. Search: TT move
+                       pre-tried before generate_moves() — on beta-cutoff returns
+                       immediately, saving ~20 move-generation ops per TT cutoff;
+                       probcut at non-PV nodes depth>=5 (captures with SEE>=199
+                       searched at depth-4 with window beta+200; prune if cutoff).
+                       Eval: pawn hash table (8192-entry, keyed on pawn bitboard
+                       fingerprint, caches pawn structure score + passed pawn bb
+                       for both sides — saves ~30-40% of eval cost per node);
+                       lazy evaluation in quiescence (material-only estimate
+                       ±350cp guards before full evaluate() — skips expensive
+                       eval at leaves where outcome is clear). Move ordering:
+                       capture history (capture_history[attacker][to][captured],
+                       gravity update, ±400cp tiebreaker in SEE groups);
+                       1-ply continuation history (cont_hist[prev_p][prev_to]
+                       [cur_p][cur_to] as short, 1.15MB, gravity update, added
+                       to quiet move score). Benchmark vs v17: +2 effective
+                       search depth in 1s on Kiwipete (v18 reaches d12 in 728ms
+                       vs v17 d10 in 264ms — v17 exits early via easy-move
+                       heuristic). 10-game movetime-100ms tournament vs v17:
+                       v18 60.0% (4W / 2L / 4D), estimated +70 Elo (wide CI).
+                       Source: c_rewrite/v18_engine.c
+                       Binary: c_rewrite/v18_engine (compiled with gcc -O3 -march=native)
+                       Deployed: Hetzner CPX11 server (178.156.243.29, Ubuntu 24.04, x86 AMD)
+                       as a systemd service. See server_details.txt for full deployment info.
 
     v17 - search and evaluation improvements on top of v16. Search: adaptive null
                        move R (R = 3 + depth/6 instead of fixed R=3; at depth 12, R=5),
