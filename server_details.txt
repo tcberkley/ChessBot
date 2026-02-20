@@ -1,0 +1,85 @@
+# HETZNER SERVER DEPLOYMENT DETAILS
+# Target: Autonomous Lichess Chess Bot (C Engine + Python Bridge)
+
+## 1. Server Credentials & Specs
+* **Name:** tcb-chess-engine
+* **IP Address:** 178.156.243.29
+* **User:** root
+* **Auth Method:** SSH Key (~/.ssh/id_ed25519, passphrase-protected — run `ssh-add ~/.ssh/id_ed25519` before connecting)
+* **OS:** Ubuntu 24.04 LTS
+* **Hardware:** CPX11 (x86 AMD), 40 GB NVMe, 2 vCPUs
+* **Python:** 3.12.3 (system)
+
+## 2. Server Directory Layout
+* **Engine source + binary:** `/root/c_rewrite/`
+* **Bot bridge:** `/root/lichess-bot-master/`
+* **Python venv:** `/root/lichess-bot-master/venv/` (built with python3.12 -m venv)
+* **API token:** `/root/lichess-bot-master/.env` (LICHESS_BOT_TOKEN=...)
+* **Systemd service:** `/etc/systemd/system/lichess-bot.service`
+
+## 3. Local Project Context
+* **Local Root:** `/Users/tomberkley/Desktop/CodeProjects/Chess`
+* **Engine Directory:** `c_rewrite/` (C source and Makefile)
+* **Bridge Directory:** `lichess-bot-master/` (Python wrapper, config.yml, requirements.txt)
+
+## 4. Current Deployment State (as of 2026-02-20)
+* Engine: **v17_engine**, compiled natively on server with `gcc -O3 -march=native`
+* Bot running as systemd service (auto-restarts on crash, starts on reboot)
+* Matchmaking: `opponent_min_rating: 1700`, `rating_preference: "high"`
+* Incoming challenge filter: `extra_game_handlers.py` rejects challengers rated below 1700
+
+## 5. Service Management Commands
+```bash
+# SSH in
+ssh root@178.156.243.29
+
+# Check status
+systemctl status lichess-bot
+
+# View live logs
+journalctl -u lichess-bot -f
+
+# Restart
+systemctl restart lichess-bot
+
+# Stop / Start
+systemctl stop lichess-bot
+systemctl start lichess-bot
+```
+
+## 6. Redeployment Steps (when updating engine or bot code)
+
+### A. Transfer updated files
+```bash
+ssh-add ~/.ssh/id_ed25519   # if agent is empty
+scp -r /Users/tomberkley/Desktop/CodeProjects/Chess/c_rewrite \
+       /Users/tomberkley/Desktop/CodeProjects/Chess/lichess-bot-master \
+       root@178.156.243.29:~/
+```
+
+### B. Recompile engine on server (REQUIRED — do not run the Mac binary on Linux)
+```bash
+ssh root@178.156.243.29 "cd ~/c_rewrite && make clean && make v17_engine"
+```
+
+### C. Restart the service
+```bash
+ssh root@178.156.243.29 "systemctl restart lichess-bot"
+```
+
+### D. Verify
+```bash
+ssh root@178.156.243.29 "journalctl -u lichess-bot -n 20 --no-pager"
+```
+
+## 7. Known Gotchas
+* **Never SCP the Mac-compiled engine binary and run it on the server** — Exec format error.
+  Always run `make clean && make v16_engine` on the server after transferring source.
+* **SSH agent must be loaded** — key is passphrase-protected. Run `ssh-add ~/.ssh/id_ed25519`
+  before any scp/ssh commands if the agent is empty (`ssh-add -l` to check).
+* **Venv must be built with python3.12** — use `python3.12 -m venv venv`, not `python3 -m venv`,
+  to avoid mixed-version symlink issues.
+* **Orphaned engine processes** — if killing the bot with pkill, also check for lingering
+  v17_engine processes: `pgrep -a v17_engine` and kill manually if found.
+* **Token not in config.yml** — the API token lives in `.env`, not config.yml (which is gitignored).
+  The systemd service reads it via `EnvironmentFile=/root/lichess-bot-master/.env`.

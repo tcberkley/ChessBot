@@ -132,6 +132,16 @@ def watch_control_stream(control_queue: CONTROL_QUEUE_TYPE, li: LICHESS_TYPE) ->
                     control_queue.put_nowait(event)
                 else:
                     control_queue.put_nowait({"type": "ping"})
+        except lichess.RateLimited as e:
+            logger.warning(f"Event stream rate limited: {e}. Waiting 60 seconds before retry.")
+            time.sleep(60)
+        except HTTPError as e:
+            if e.response is not None and e.response.status_code == 429:
+                logger.warning("Event stream got HTTP 429. Waiting 60 seconds before retry.")
+                time.sleep(60)
+            else:
+                error = traceback.format_exc()
+                break
         except Exception:
             error = traceback.format_exc()
             break

@@ -18,4 +18,12 @@ def is_supported_extra(challenge: model.Challenge) -> bool:
 
     By default, True is always returned so that there are no extra restrictions beyond those in the config file.
     """
+    if challenge.challenger.is_bot:
+        # Decline low-rated bots
+        rating = challenge.challenger.rating
+        if rating and rating < 1600:
+            return False
+        # Bots may only play rated games — casual is humans only
+        if not challenge.rated:
+            return False
     return True
