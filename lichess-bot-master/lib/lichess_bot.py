@@ -413,7 +413,9 @@ def lichess_bot_main(li: LICHESS_TYPE,
                                      base_time=event.get("base_time", 0),
                                      increment=event.get("increment", 0),
                                      days=event.get("days", 0),
-                                     mode=event.get("mode", "rated"))
+                                     mode=event.get("mode", "rated"),
+                                     opponent_rating=event.get("opponent_rating", 0),
+                                     my_rating=event.get("my_rating", 0))
                 log_proc_count("Freed", active_games)
                 one_game_completed = True
             elif event["type"] == "challenge":
@@ -941,7 +943,9 @@ def final_queue_entries(control_queue: CONTROL_QUEUE_TYPE, correspondence_queue:
                               "base_time": int(to_seconds(game.clock_initial)),
                               "increment": int(to_seconds(game.clock_increment)),
                               "days": 0,
-                              "mode": game.mode})
+                              "mode": game.mode,
+                              "opponent_rating": game.opponent.rating or 0,
+                              "my_rating": game.me.rating or 0})
     pgn_queue.put_nowait({"game": {"id": game.id,
                                    "pgn": pgn_record,
                                    "complete": is_game_over(game)}})
