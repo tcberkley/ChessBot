@@ -30,36 +30,13 @@ Running the Bot:
  GitHub - https://github.com/tcberkley/ChessBot
 
 
-v19 Feature Candidates:
+v20 Feature Candidates:
     Ranked by estimated Elo gain. Ranges are rough — small samples have wide CIs.
-    v18 already has: SEE, clustered TT, Lazy SMP, pawn hash, probcut,
-    cont/capture history, TT pre-try, singular extensions, IID, aspiration,
-    LMR, PVS, null move (adaptive R), futility (forward+reverse), delta pruning,
-    check/endgame extensions, score instability / easy-move detection.
+    v19 already has (on top of v18): razoring, history-adjusted LMR, LMP,
+    king tropism, passed pawn king proximity, candidate passed pawns, mop-up eval,
+    threat detection (pawn attacks on undefended enemy pieces).
 
     --- Search (highest bang-for-buck) ---
-
-    Late Move Pruning (LMP)                ~8-15 Elo
-        At low depths (<=4), not in check, not PV: if move_count exceeds a
-        threshold (e.g. depth*depth + 3*depth for quiet moves), skip the rest.
-        Harder version of LMR — outright prune instead of reduce. Move count
-        threshold from Weiss/Berserk: quiets_tried > (3 + depth*depth) / (2 - improving).
-        "improving" = static_eval > eval two plies ago (tracks eval trend).
-        Risk: may miss key quiet moves; keep captures/promotions/checks exempt.
-
-    History-adjusted LMR                   ~5-10 Elo
-        Currently LMR reduction is purely (depth, move_count). Adjust using
-        history score of the move: high-history moves get 1 ply less reduction,
-        negative-history moves get 1 ply more. Effectively concentrates search
-        on moves the engine has found good in the past.
-        Change: reduction -= (history_score / 8192); clamped to [0, depth-1].
-
-    Razoring                               ~5-8 Elo
-        At depth 1 only: if static_eval + 300 < alpha, drop straight to
-        quiescence instead of full move loop. Complements forward futility
-        (already at depth 1-2) by catching positions where even qsearch won't
-        help. Simple: if (depth == 1 && !in_check && eval+300 < alpha)
-            return quiescence(alpha, beta).
 
     Quiescence checks (depth -1)           ~3-7 Elo
         In quiescence, at the first ply (ply immediately after dropping from
@@ -82,56 +59,32 @@ v19 Feature Candidates:
         Avoids wasting time at All-nodes. Gate: not already in null-move search,
         score bounds not mating. Can false-prune; tune M/C/R conservatively.
 
+    Improving heuristic for LMP            ~2-4 Elo
+        "improving" = static_eval > eval two plies ago. If improving, be less
+        aggressive with LMP (higher threshold). Requires storing static_eval
+        per ply: static_evals[ply]. Gate existing LMP threshold on improving flag.
+        Change: lmp_base = improving ? lmp_threshold[depth]*2 : lmp_threshold[depth].
+
     --- Evaluation ---
 
-    Rook + Queen mobility                  ~5-8 Elo
-        Currently only knight and bishop mobility are scored. Add rook mobility
-        (count reachable squares on open/semi-open file ≤ 14) and queen mobility
-        (similar). Same isqrt_x20 table scaling as knights. Rook MG bonus ~4cp
-        per reachable square, queen ~2cp. Cache via occupancies[both] which is
-        already available. Endgame-taper both: more valuable in MG when lines
-        are closed.
-
-    King tropism (piece proximity to enemy king)  ~4-7 Elo
-        Bonus for own pieces close to the enemy king in middlegame. Use Chebyshev
-        distance: bonus = (7 - dist) * weight where weight≈2 for queen, 1 for
-        rook, 1 for bishop, 1 for knight. Complements existing king_attack_count;
-        tropism rewards approach even before pieces enter the attack zone.
-        Only in MG (phase >= PHASE_THRESHOLD).
-
-    Passed pawn king proximity              ~4-7 Elo
-        In endgame (phase < PHASE_THRESHOLD): bonus when own king is close to
-        own passed pawn (supporting advance); penalty when enemy king is close
-        to own passed pawn (blocking). Use Manhattan distance from king to passer.
-        Formula: score += (5 - own_king_dist_to_passer) * 8 (capped at 40cp);
-                 score -= (5 - enemy_king_dist_to_passer) * 8.
-        Store passed pawn squares from pawn_hash entry (already computed).
-
-    Candidate passed pawns                 ~4-8 Elo
-        Pawns where only ONE enemy pawn is ahead on the same or adjacent file
-        and there's at least one own pawn able to exchange into a passed pawn.
-        Give ~25% of passed pawn bonus. Condition: popcount(pass_mask & enemy) == 1
-        AND popcount(adj_files & own_ahead) >= 1. Stricter than the v16 attempt.
-        Add to pawn_eval_side() so it's pawn-hash-cached.
-
-    Mop-up eval (lone king endgame)        ~3-6 Elo
-        When opponent has only a lone king: score = material + 4*(centre_dist
-        of enemy king) + 5*(7 - manhattan_dist(own_king, enemy_king)).
-        Pushes the winning king toward the cornered king and avoids stalemate.
-        Gate: opponent_material == 0 (no pieces, no pawns). Replace normal
-        eval completely in this case.
-
-    Threat detection in eval               ~3-6 Elo
-        Award ~15cp per undefended enemy piece attacked by own piece. Penalty
-        ~10cp per own undefended piece attacked by enemy. "Defended" = attacked
-        by any piece of same color. Use existing attack generation. Only MG.
-        Complements king_attack_count; penalizes leaving loose pieces.
+    Stronger threat detection              ~3-5 Elo
+        v19 has pawn->piece threats (8cp/undefended). Extend to:
+        (a) minor piece attacks on undefended enemy pieces (10cp for attacking
+        rook/queen with knight or bishop when undefended by any enemy piece);
+        (b) penalty for own pieces under threat from enemy pawns (-5cp each).
+        Use existing attack tables; add per-piece type loop.
 
     Space advantage                        ~2-5 Elo
         Count squares behind the opponent's pawn chain that are controlled by
         own pieces (rank 3-5 for white, 4-6 for black). Bonus = count * 2cp,
         scaled by how closed the position is (open positions value space less).
         Closed: few pawn exchanges, many doubled/locked pawns.
+
+    Pawn push evaluation                   ~2-4 Elo
+        Bonus for pawns that can safely advance (no enemy pawn attack on
+        destination, no pin). Encourages space-gaining pawn breaks. Simple:
+        for each pawn, check if stop_sq is safe (not attacked by enemy pawns)
+        and add a small bonus (3-5cp). Scale by advancement.
 
     --- Infrastructure ---
 
@@ -141,11 +94,11 @@ v19 Feature Candidates:
         Minimize MSE of sigmoid(eval/400) vs outcome via gradient descent on
         all PST values, piece values, and eval weights. Very high effort (~week)
         but the single largest structural improvement available. Stockfish,
-        Ethereal, and all top engines use this — hand-tuned values always lose.
+        Ethereal, and all top engines use this -- hand-tuned values always lose.
 
     Pondering                              ~15-30 Elo
         Search on the opponent's time using the expected reply (PV[1]).
-        If opponent plays ponder move: "ponderhit" — reuse search, effectively
+        If opponent plays ponder move: "ponderhit" -- reuse search, effectively
         doubles thinking time. If they don't: discard, start fresh.
         config.yml has ponder: false already. Needs: ponder state tracking,
         modified search_position() to accept a ponder flag and stop on ponderhit.
@@ -347,3 +300,30 @@ Bot Version History:
                        Perft still exact (startpos d5=4865609, Kiwipete d4=4085603).
                        Source: c_rewrite/v18_engine.c (updated in place)
                        Deployed: Hetzner server recompiled and restarted 2026-02-20.
+
+    v19 - search and eval improvements on top of v18 (with singular extensions).
+                       Search: Razoring (depth==1, eval+300<=alpha → drop to qsearch,
+                       complements forward futility); History-adjusted LMR (subtract
+                       history/8192 from reduction, clamped to [0, depth-2] — good
+                       history moves get reduced less); Late Move Pruning (LMP: at
+                       depth<=3, non-PV, not in check, skip quiet moves after trying
+                       lmp_threshold[depth] = {0,5,10,18} quiets, harder than LMR).
+                       Eval: King tropism (Chebyshev distance bonus for knights/queens
+                       (weight 3) and bishops/rooks (weight 2) close to enemy king,
+                       tapered by phase/24); Passed pawn king proximity (endgame:
+                       +5*(7-own_king_cheb_to_passer) + 5*enemy_king_cheb_to_passer
+                       per passed pawn — rewards active king support); Candidate
+                       passed pawns (in pawn_eval_side: if exactly 1 enemy pawn in
+                       pass_mask, award 25% of passed bonus — pawn-hash-cached);
+                       Mop-up eval (when opponent has bare king: corner bonus via
+                       r_to_edge/f_to_edge + king proximity bonus; applied per-side
+                       in evaluate() after evaluate_side() calls); Threat detection
+                       (bonus of 8cp per undefended enemy piece attacked by own pawns,
+                       undefended = not covered by enemy pawns — in evaluate_side()).
+                       Note: Rook+Queen mobility were already in v18 (not re-added).
+                       30-game movetime-100ms tournament vs v18: v19 58.3%
+                       (12W / 7L / 11D), estimated +58 Elo.
+                       Perft verified: startpos d5=4865609, Kiwipete d4=4085603,
+                       pos3 d6=11030083, CMK d3=62379.
+                       Source: c_rewrite/v19_engine.c
+                       Binary: c_rewrite/v19_engine (compiled with gcc -O3 -march=native -pthread)
