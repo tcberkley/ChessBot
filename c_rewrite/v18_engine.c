@@ -3287,7 +3287,10 @@ static inline int evaluate_side(int color, int phase, int pawn_score_in, U64 own
         // King safety (middlegame only)
         if (!end_game) {
             // v16: Pawn shield quality (penalize advanced shield pawns)
-            int king_bbc_rank = sq >> 3;
+            // get_rank[sq] = chess rank index: 0=rank1, 7=rank8.
+            // White king is on a low rank; a shield pawn is 1-2 ranks higher.
+            // Black king is on a high rank; a shield pawn is 1-2 ranks lower.
+            int king_rank = get_rank[sq];
             for (int kf = king_file - 1; kf <= king_file + 1; kf++) {
                 if (kf < 0 || kf > 7) continue;
                 U64 pawns_on_file = own_pawns_bb & file_masks[kf];
@@ -3297,9 +3300,9 @@ static inline int evaluate_side(int color, int phase, int pawn_score_in, U64 own
                     int p_rank = get_rank[psq];
                     int rank_dist;
                     if (color == white)
-                        rank_dist = king_bbc_rank - p_rank;  // positive = pawn in front
+                        rank_dist = p_rank - king_rank;  // positive = pawn ahead of king
                     else
-                        rank_dist = p_rank - king_bbc_rank;  // positive = pawn in front
+                        rank_dist = king_rank - p_rank;  // positive = pawn ahead of king
                     if (rank_dist == 1) has_immediate = 1;
                     else if (rank_dist == 2) has_advanced = 1;
                     pop_bit(pawns_on_file, psq);
@@ -3428,9 +3431,13 @@ static inline int evaluate()
 
     int phase = get_game_phase();
 
-    // v18: Pawn hash — cache pawn structure eval for both sides
+    // v18: Pawn hash — cache pawn structure eval for both sides.
+    // Phase is included in the key because pawn_eval_side() bakes tapered PST
+    // scores into the cached result; a stale entry at a different phase would
+    // return a score computed with the wrong MG/EG blend.
     U64 pkey = bitboards[P] * 0x9e3779b97f4a7c15ULL ^
-               bitboards[p] * 0x517cc1b727220a95ULL;
+               bitboards[p] * 0x517cc1b727220a95ULL ^
+               (U64)phase;
     int pidx = (int)(pkey & PAWN_HASH_MASK);
     pawn_hash_entry *phe = &pawn_table[pidx];
     U64 white_passed = 0ULL, black_passed = 0ULL;
