@@ -72,12 +72,13 @@ class Matchmaking:
         for name in self.matchmaking_cfg.block_list:
             self.add_to_block_list(name)
 
-        # Rematch tracking: offer immediate rematch after a win
+        # Rematch tracking: offer one immediate rematch after a win, but not after a rematch win
         self.rematch_opponent: Optional[str] = None
         self.rematch_base_time: int = 0
         self.rematch_increment: int = 0
         self.rematch_days: int = 0
         self.rematch_mode: str = "rated"
+        self.last_rematched_opponent: Optional[str] = None  # prevent back-to-back rematches
 
     def should_create_challenge(self) -> bool:
         """Whether we should create a challenge."""
@@ -187,6 +188,7 @@ class Matchmaking:
             days = self.rematch_days
             mode = self.rematch_mode
             self.rematch_opponent = None  # Clear so we don't loop forever
+            self.last_rematched_opponent = opponent
             if not self.in_block_list(opponent):
                 variant = self.get_random_config_value(self.matchmaking_cfg, "challenge_variant", self.variants)
                 logger.info(f"Offering rematch to {opponent} ({base_time}+{increment}).")
@@ -301,13 +303,16 @@ class Matchmaking:
                   base_time: int = 0, increment: int = 0, days: int = 0, mode: str = "rated") -> None:
         """Reset the timer for when the last game ended, and prints the earliest that the next challenge will be created."""
         self.last_game_ended_delay.reset()
-        if won and opponent:
+        if won and opponent and opponent != self.last_rematched_opponent:
             logger.info(f"Won against {opponent} — queuing immediate rematch.")
             self.rematch_opponent = opponent
             self.rematch_base_time = base_time
             self.rematch_increment = increment
             self.rematch_days = days
             self.rematch_mode = mode
+        elif won and opponent and opponent == self.last_rematched_opponent:
+            logger.info(f"Won rematch against {opponent} — skipping further rematch to avoid farming.")
+            self.last_rematched_opponent = None  # Reset so a future win against them is fine
         self.show_earliest_challenge_time()
 
     def show_earliest_challenge_time(self) -> None:
