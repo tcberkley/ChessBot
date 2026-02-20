@@ -4671,8 +4671,12 @@ void parse_go(char *command)
             if (hard < time_budget_ms) hard = time_budget_ms;
             v14_hard_limit_ms = hard;
             search_depth = 30;
+        } else if (wtime >= 0 || btime >= 0) {
+            // Clock sent but our time is 0 (flagged / time scramble) — return a move fast
+            time_budget_ms = 100;
+            search_depth = 30;
         } else {
-            // Infinite or no time info
+            // No time info at all — infinite search (e.g. "go infinite")
             search_depth = 30;
             time_budget_ms = 0;
         }
