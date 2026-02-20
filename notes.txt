@@ -246,8 +246,15 @@ Bot Version History:
                        pawn on same color squares as bishop); king attack count scoring —
                        counts enemy pieces attacking the 8 squares around the king with
                        weights (Q=5, R=3, B=2, N=2, P=1), penalty = danger²/4 capped at
-                       150cp, middlegame only. Pawn hash table deferred to v18
-                       (requires evaluate_side refactor to pass passed_bb out).
+                       150cp, middlegame only. TT: clustered transposition table — 4
+                       entries per 64-byte cache line (1M clusters × 4 = 4M entries,
+                       64MB, 64-byte aligned). Replacement policy: depth-preferred per
+                       cluster slot, with exact-flag override. Probe iterates all 4
+                       entries; prefetch targets the whole cluster. Benchmark depth 12
+                       vs v16 single-entry: 23% fewer nodes searched (1,054k vs 1,370k).
+                       Estimated +0.5–1 ply effective search depth; no separate Elo
+                       test run (node reduction is structural, not Elo-tested directly).
+                       Pawn hash table deferred to v18 (requires evaluate_side refactor).
                        50-game movetime-100ms tournament vs v16: v17 56.0%
                        (17W / 11L / 22D), estimated +42 Elo.
                        Source: c_rewrite/v17_engine.c

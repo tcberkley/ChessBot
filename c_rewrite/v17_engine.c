@@ -3407,9 +3407,15 @@ static inline int evaluate()
  ==================================
 \**********************************/
 
-// TT size: 2M entries (power of 2)
-#define TT_SIZE (1 << 22)  // 4194304 (64MB with 16-byte entries)
-#define TT_MASK (TT_SIZE - 1)
+// v17: Clustered TT — 4 entries per 64-byte cache line.
+// Same total memory (4M entries × 16 bytes = 64MB) but dramatically higher hit rate:
+// probing all 4 entries in a cluster costs zero extra cache misses since the whole
+// cluster is fetched in one shot.
+#define TT_CLUSTER_SIZE 4
+#define TT_NUM_CLUSTERS (1 << 20)       // 1M clusters = 4M entries = 64MB
+#define TT_CLUSTER_MASK (TT_NUM_CLUSTERS - 1)
+// Keep TT_MASK alias so prefetch call compiles unchanged
+#define TT_MASK TT_CLUSTER_MASK
 
 #define NO_HASH_ENTRY 100000
 
@@ -3418,67 +3424,98 @@ static inline int evaluate()
 #define HASH_FLAG_BETA  2  // LOWERBOUND
 
 typedef struct {
-    unsigned int hash32;   // upper 32 bits of Zobrist key (saves 4 bytes vs full U64)
+    unsigned int hash32;   // upper 32 bits of Zobrist key
     int best_move;         // 4 bytes
-    int score;             // 4 bytes (must stay int: scores reach ±49000)
-    signed char depth;     // 1 byte (max depth ~64, fits in signed char)
-    unsigned char flag;    // 1 byte (0=exact, 1=alpha, 2=beta)
-    unsigned char pad[2];  // 2 bytes padding for 4-byte alignment
-} tt_entry;                // 16 bytes total (4 entries per 64-byte cache line)
+    int score;             // 4 bytes
+    signed char depth;     // 1 byte
+    unsigned char flag;    // 1 byte
+    unsigned char pad[2];  // 2 bytes padding
+} tt_entry;                // 16 bytes
 
-tt_entry hash_table[TT_SIZE];
+typedef struct {
+    tt_entry entries[TT_CLUSTER_SIZE];  // 64 bytes = exactly one cache line
+} tt_cluster;
+
+// Aligned to 64 bytes so each cluster starts on a cache line boundary
+tt_cluster hash_table[TT_NUM_CLUSTERS] __attribute__((aligned(64)));
 
 void clear_hash_table()
 {
     memset(hash_table, 0, sizeof(hash_table));
 }
 
-// Read TT entry; returns NO_HASH_ENTRY if not found
-// Also sets *tt_best_move if entry exists for this position
+// Read TT entry; returns NO_HASH_ENTRY if not found.
+// Searches all 4 entries in the cluster — all fit in one cache line so no extra misses.
+// Also extracts best_move from any matching entry for move ordering (regardless of depth).
 static inline int read_hash_entry(int alpha, int beta, int depth, int *tt_best_move)
 {
-    tt_entry *entry = &hash_table[hash_key & TT_MASK];
+    tt_cluster *cluster = &hash_table[hash_key & TT_CLUSTER_MASK];
+    unsigned int hash32 = (unsigned int)(hash_key >> 32);
 
-    if (entry->hash32 == (unsigned int)(hash_key >> 32)) {
-        // Always extract best move regardless of depth
-        *tt_best_move = entry->best_move;
+    for (int i = 0; i < TT_CLUSTER_SIZE; i++) {
+        tt_entry *entry = &cluster->entries[i];
+        if (entry->hash32 == hash32) {
+            // Always extract best move for move ordering
+            *tt_best_move = entry->best_move;
 
-        if ((int)entry->depth >= depth) {
-            int score = entry->score;
+            if ((int)entry->depth >= depth) {
+                int score = entry->score;
 
-            // Adjust mate scores for search path
-            if (score < -mate_score) score += ply;
-            if (score > mate_score) score -= ply;
+                // Adjust mate scores for search path
+                if (score < -mate_score) score += ply;
+                if (score > mate_score) score -= ply;
 
-            if (entry->flag == HASH_FLAG_EXACT)
-                return score;
-            if (entry->flag == HASH_FLAG_ALPHA && score <= alpha)
-                return alpha;
-            if (entry->flag == HASH_FLAG_BETA && score >= beta)
-                return beta;
+                if (entry->flag == HASH_FLAG_EXACT)
+                    return score;
+                if (entry->flag == HASH_FLAG_ALPHA && score <= alpha)
+                    return alpha;
+                if (entry->flag == HASH_FLAG_BETA && score >= beta)
+                    return beta;
+            }
+            return NO_HASH_ENTRY;  // Key matched but depth/bound didn't — stop searching
         }
     }
 
     return NO_HASH_ENTRY;
 }
 
-// Write TT entry (depth-preferred replacement)
+// Write TT entry.
+// Replacement policy: prefer to reuse a matching slot (same position);
+// otherwise replace the slot with the lowest depth (least valuable entry).
 static inline void write_hash_entry(int score, int depth, int flag, int best_move)
 {
-    tt_entry *entry = &hash_table[hash_key & TT_MASK];
+    tt_cluster *cluster = &hash_table[hash_key & TT_CLUSTER_MASK];
+    unsigned int hash32 = (unsigned int)(hash_key >> 32);
 
-    // Depth-preferred: only overwrite if new depth >= stored depth, or different position
-    if (entry->hash32 != (unsigned int)(hash_key >> 32) || depth >= (int)entry->depth) {
-        // Adjust mate scores for storage
-        if (score < -mate_score) score -= ply;
-        if (score > mate_score) score += ply;
+    // Adjust mate scores for storage
+    if (score < -mate_score) score -= ply;
+    if (score > mate_score) score += ply;
 
-        entry->hash32     = (unsigned int)(hash_key >> 32);
-        entry->depth      = (signed char)depth;
-        entry->score      = score;
-        entry->flag       = (unsigned char)flag;
-        entry->best_move  = best_move;
+    // Find: matching entry to update, OR lowest-depth entry to replace
+    tt_entry *replace = &cluster->entries[0];
+    for (int i = 0; i < TT_CLUSTER_SIZE; i++) {
+        tt_entry *entry = &cluster->entries[i];
+        if (entry->hash32 == hash32) {
+            // Found this position's slot. Update if new depth >= stored, or always for exact.
+            if (depth >= (int)entry->depth || flag == HASH_FLAG_EXACT) {
+                replace = entry;
+            } else {
+                // Shallower non-exact result: just refresh the best_move if we have one
+                if (best_move) entry->best_move = best_move;
+                return;
+            }
+            break;
+        }
+        // Track replacement candidate: empty slot or lowest depth
+        if (entry->hash32 == 0 || (int)entry->depth < (int)replace->depth)
+            replace = entry;
     }
+
+    replace->hash32    = hash32;
+    replace->depth     = (signed char)depth;
+    replace->score     = score;
+    replace->flag      = (unsigned char)flag;
+    replace->best_move = best_move;
 }
 
 
@@ -3813,8 +3850,8 @@ static inline int negamax(int alpha, int beta, int depth, int null_ok)
     // PV node flag
     int pv_node = (beta - alpha > 1);
 
-    // TT lookup (prefetch slot into cache before other work)
-    __builtin_prefetch(&hash_table[hash_key & TT_MASK], 0, 1);
+    // TT lookup (prefetch full 64-byte cluster into cache before other work)
+    __builtin_prefetch(&hash_table[hash_key & TT_CLUSTER_MASK], 0, 1);
     int tt_best_move = 0;
     if (ply) {
         int tt_score = read_hash_entry(alpha, beta, depth, &tt_best_move);
