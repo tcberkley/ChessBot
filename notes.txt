@@ -8,6 +8,21 @@ Lichess Bot Setup:
     - Run with: cd lichess-bot-master && python lichess-bot.py
 
 
+Streaming Deadlock Fix (2026-02-22):
+    Root cause: iter_lines() on streaming HTTP has no read timeout; control_queue.get()
+    had no timeout → both the control stream process and main loop deadlocked when
+    Lichess's event stream went silent after a game ended/aborted.
+    Fix (lichess-bot-master/lib/):
+      lichess.py: timeout=(15, 60) on get_event_stream() and get_game_stream()
+                  (tuple = connect/read; 60s read timeout matches Lichess ~30s keepalive)
+      lichess_bot.py: ReadTimeout/RemoteDisconnected/ChunkedEncodingError/ConnectionError
+                      caught in watch_control_stream() → log + reconnect instead of crash
+      lichess_bot.py: control_queue.get(timeout=30) in next_event() → handles Empty so
+                      main loop wakes up every 30s even if stream is stalled
+    Watchdog: /root/scripts/watchdog_lichess_bot.sh (cron every 15 min) — restarts bot
+    if systemd service is active but journalctl silent >30 min (belt-and-suspenders)
+
+
 Tournament Auto-Join:
     - Script: scripts/join_bot_tournaments.py
     - Cron (server, UTC): */30 * * * * — runs every 30 minutes
@@ -409,6 +424,12 @@ Bot Version History:
                        Tournament (opening-book, depth 10, 1800 games, script:
                        c_rewrite/tournament_openings.py): v20 55.1% vs v19
                        (635W / 713D / 452L), estimated +35 Elo.
+                       Bug fix (2026-02-22): panic time management for sub-10s
+                       no-increment games. Old formula could allocate up to 600ms/move
+                       budget and a 2600ms hard limit at 9s remaining, causing flags.
+                       New: when time < 10s and inc == 0, budget = clock/30 clamped to
+                       [50ms, 250ms]; hard limit clamped to budget+150ms. Games with
+                       increment are unaffected.
                        Source: c_rewrite/v20_engine.c
                        Binary: c_rewrite/v20_engine (compiled with gcc -O3 -march=native -pthread)
                        Deployed: Hetzner CPX11 server (178.156.243.29, Ubuntu 24.04, x86 AMD)
