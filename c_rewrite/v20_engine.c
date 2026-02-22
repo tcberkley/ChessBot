@@ -4487,6 +4487,14 @@ static inline int negamax(int alpha, int beta, int depth, int null_ok)
 // Time management: allocate time for this move (in ms)
 static int allocate_time(int my_time_ms, int my_inc_ms, int move_number)
 {
+    // Panic mode: low time with no increment — make very fast moves to survive
+    if (my_inc_ms == 0 && my_time_ms < 10000) {
+        int budget = my_time_ms / 30;   // plan for 30 more moves
+        if (budget < 50)  budget = 50;  // floor: need a minimal search
+        if (budget > 250) budget = 250; // cap: never spend >250ms when desperate
+        return budget;
+    }
+
     int moves_left;
     if (move_number < 10) moves_left = 25;
     else if (move_number < 30) moves_left = 20;
@@ -4862,6 +4870,11 @@ void parse_go(char *command)
             // Hard safety: never use more than 40% of remaining clock minus overhead
             int hard = (int)(my_time * 0.4) - 1000;
             if (hard < time_budget_ms) hard = time_budget_ms;
+            // When time is short, clamp hard limit tightly to prevent single-move blowout
+            if (my_time < 10000) {
+                int max_hard = time_budget_ms + 150;
+                if (hard > max_hard) hard = max_hard;
+            }
             v14_hard_limit_ms = hard;
             search_depth = 30;
         } else if (wtime >= 0 || btime >= 0) {
