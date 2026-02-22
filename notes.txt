@@ -1,11 +1,21 @@
 Lichess Bot Setup:
     - Account: tombot1234
-    - Engine: v18_engine (UCI protocol)
+    - Engine: v20_engine (UCI protocol, Texel-tuned)
     - Config: lichess-bot-master/config.yml
     - Time controls: blitz, rapid, classical
     - Matchmaking: auto-challenges other bots every 1 min; offers rematch after a win
     - Uses Lichess opening explorer (masters) and online endgame tablebases (7-piece)
     - Run with: cd lichess-bot-master && python lichess-bot.py
+
+
+Tournament Auto-Join:
+    - Script: scripts/join_bot_tournaments.py
+    - Cron (server, UTC): */30 * * * * — runs every 30 minutes
+    - Fetches GET /api/tournament, checks each for botsAllowed==true via GET /api/tournament/{id}
+    - Joins eligible tournaments via POST /api/tournament/{id}/join
+    - Token: LICHESS_TOURNAMENT_TOKEN in lichess-bot-master/.env (needs tournament:write scope)
+    - Log: /root/scripts/join_bot_tournaments.log on server
+    - Note: botsAllowed is a top-level boolean in the detail response (NOT conditions.bots)
 
 
 Running the Bot:
