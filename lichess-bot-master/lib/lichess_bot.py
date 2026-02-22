@@ -142,6 +142,9 @@ def watch_control_stream(control_queue: CONTROL_QUEUE_TYPE, li: LICHESS_TYPE) ->
             else:
                 error = traceback.format_exc()
                 break
+        except (ReadTimeout, RemoteDisconnected, ChunkedEncodingError, ConnectionError) as e:
+            logger.warning(f"Event stream connection lost ({type(e).__name__}). Reconnecting...")
+            time.sleep(1)
         except Exception:
             error = traceback.format_exc()
             break
@@ -462,10 +465,10 @@ def close_pool(pool: POOL_TYPE, active_games: set[str], config: Configuration) -
 def next_event(control_queue: CONTROL_QUEUE_TYPE) -> EventType:
     """Get the next event from the control queue."""
     try:
-        event = control_queue.get()
+        event = control_queue.get(timeout=30)
         if event is None:
             return {}
-    except InterruptedError:
+    except (InterruptedError, Empty):
         return {}
 
     if "type" not in event:
