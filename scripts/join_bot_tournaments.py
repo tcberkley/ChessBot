@@ -106,8 +106,8 @@ def is_bot_eligible(tournament_id: str) -> bool:
     data = api_get(f"/api/tournament/{tournament_id}")
     if not data:
         return False
-    conditions = data.get("conditions", {})
-    return bool(conditions.get("bots", False))
+    # API returns top-level "botsAllowed": true (not conditions.bots)
+    return bool(data.get("botsAllowed", False))
 
 
 def format_start(t: dict) -> str:
