@@ -16,14 +16,19 @@ def is_supported_extra(challenge: model.Challenge) -> bool:
     """
     Determine whether to accept a challenge.
 
-    By default, True is always returned so that there are no extra restrictions beyond those in the config file.
+    Accept only if the challenger is within 300 rating points of the bot in the
+    challenged time control (bullet, blitz, rapid, classical). If either rating is
+    unknown, the check is skipped. Bots must also play rated games only.
     """
-    if challenge.challenger.is_bot:
-        # Decline low-rated bots
-        rating = challenge.challenger.rating
-        if rating and rating < 1600:
+    # Bots may only play rated games — casual is humans only
+    if challenge.challenger.is_bot and not challenge.rated:
+        return False
+
+    # Rating proximity check: within ±300 in the specific game mode
+    my_rating = challenge.my_perfs.get(challenge.speed, {}).get("rating", 0)
+    challenger_rating = challenge.challenger.rating or 0
+    if my_rating > 0 and challenger_rating > 0:
+        if abs(challenger_rating - my_rating) > 300:
             return False
-        # Bots may only play rated games — casual is humans only
-        if not challenge.rated:
-            return False
+
     return True

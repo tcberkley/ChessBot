@@ -28,6 +28,7 @@ class Challenge:
         self.challenger = Player(challenge_info.get("challenger") or {})
         self.challenge_target = Player(challenge_info.get("destUser") or {})
         self.from_self = self.challenger.name == user_profile["username"]
+        self.my_perfs = user_profile.get("perfs", {})
         self.initial_fen = challenge_info.get("initialFen", "startpos")
         color = challenge_info["color"]
         self.color = color if color != "random" else challenge_info["finalColor"]

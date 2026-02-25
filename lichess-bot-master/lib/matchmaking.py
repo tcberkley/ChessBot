@@ -286,7 +286,12 @@ class Matchmaking:
         self.update_user_profile()
         bot_username, base_time, increment, days, variant, mode = self.choose_opponent()
         logger.info(f"Will challenge {bot_username} for a {variant} game.")
-        challenge_id = self.create_challenge(bot_username, base_time, increment, days, variant, mode) if bot_username else ""
+        if bot_username:
+            challenge_id = self.create_challenge(bot_username, base_time, increment, days, variant, mode)
+        else:
+            self.last_challenge_created_delay.reset()
+            self.show_earliest_challenge_time()
+            challenge_id = ""
         logger.info(f"Challenge id is {challenge_id if challenge_id else 'None'}.")
         self.challenge_id = challenge_id
 
