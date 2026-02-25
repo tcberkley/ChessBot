@@ -12,6 +12,7 @@ Cron (server, UTC): 0 23 * * * /root/lichess-bot-master/venv/bin/python \
     /root/scripts/daily_summary.py >> /root/scripts/daily_summary.log 2>&1
 """
 
+import csv
 import json
 import os
 import smtplib
@@ -50,6 +51,7 @@ def load_dotenv(path: str = ".env") -> None:
 # ---------------------------------------------------------------------------
 BOT_USERNAME = "tombot1234"
 LICHESS_API_BASE = "https://lichess.org"
+CSV_LOG_PATH = "/root/scripts/challenge_log.csv"
 
 # ---------------------------------------------------------------------------
 # Lichess API helpers (stdlib urllib only — no requests dependency)
@@ -86,6 +88,62 @@ def fetch_games(token: str, since_ms: int) -> list[dict]:
                 except json.JSONDecodeError:
                     pass
     return games
+
+
+# ---------------------------------------------------------------------------
+# Challenge log
+# ---------------------------------------------------------------------------
+def read_challenge_log(since_ms: int) -> dict:
+    """Read challenge_log.csv and return outgoing/incoming rows from the last 24h."""
+    since_dt = datetime.fromtimestamp(since_ms / 1000, tz=timezone.utc).replace(tzinfo=None)
+    outgoing_sent: dict[str, dict] = {}    # challenge_id -> sent row
+    outgoing_declined: dict[str, dict] = {}  # challenge_id -> declined row
+    incoming: list[dict] = []
+
+    try:
+        with open(CSV_LOG_PATH, newline="") as f:
+            for row in csv.DictReader(f):
+                try:
+                    row_dt = datetime.strptime(row["timestamp_utc"], "%Y-%m-%d %H:%M:%S")
+                except ValueError:
+                    continue
+                if row_dt < since_dt:
+                    continue
+                # Convert timestamp to ET for display
+                row["time"] = datetime.fromtimestamp(
+                    row_dt.replace(tzinfo=timezone.utc).timestamp(), tz=ET
+                ).strftime("%I:%M %p").lstrip("0")
+
+                direction = row.get("direction", "")
+                event = row.get("event", "")
+                if direction == "outgoing":
+                    if event == "sent":
+                        outgoing_sent[row["challenge_id"]] = row
+                    elif event == "declined":
+                        outgoing_declined[row["challenge_id"]] = row
+                elif direction == "incoming":
+                    incoming.append(row)
+    except FileNotFoundError:
+        pass  # CSV not created yet
+
+    # Merge sent + declined into one outgoing list
+    outgoing = []
+    for cid, sent_row in outgoing_sent.items():
+        declined_row = outgoing_declined.get(cid)
+        if declined_row:
+            sent_row["outcome"] = "Declined"
+            sent_row["decline_reason"] = declined_row.get("decline_reason", "")
+            sent_row["opponent_rating"] = declined_row.get("opponent_rating", "")
+        else:
+            sent_row["outcome"] = "Accepted"
+            sent_row["decline_reason"] = ""
+        outgoing.append(sent_row)
+
+    # Sort by time
+    outgoing.sort(key=lambda r: r["timestamp_utc"])
+    incoming.sort(key=lambda r: r["timestamp_utc"])
+
+    return {"outgoing": outgoing, "incoming": incoming}
 
 
 # ---------------------------------------------------------------------------
@@ -194,7 +252,68 @@ RESULT_COLORS = {"W": "#27ae60", "L": "#e74c3c", "D": "#95a5a6"}
 RESULT_LABELS = {"W": "Win", "L": "Loss", "D": "Draw"}
 
 
-def build_html(stats: dict, date_str: str) -> str:
+def build_challenge_html(outgoing: list, incoming: list) -> str:
+    """Build HTML tables for outgoing and incoming challenges."""
+    # Outgoing table
+    out_rows = ""
+    for r in outgoing:
+        rated_str = "Yes" if str(r.get("rated", "")).lower() in ("true", "yes", "1") else "No"
+        if r["outcome"] == "Declined":
+            reason = r.get("decline_reason", "")
+            outcome_html = f"<span style='color:#e74c3c'>Declined</span>" + (f" <small>({reason})</small>" if reason else "")
+        else:
+            outcome_html = "<span style='color:#27ae60'>Accepted</span>"
+        opp_rating = r.get("opponent_rating", "")
+        opp_str = r["opponent"] + (f" ({opp_rating})" if opp_rating else "")
+        out_rows += (
+            f"<tr><td>{r['time']}</td><td>{opp_str}</td>"
+            f"<td>{r.get('time_control','')}</td><td>{r.get('variant','')}</td>"
+            f"<td>{rated_str}</td><td>{outcome_html}</td></tr>\n"
+        )
+    if not out_rows:
+        out_rows = "<tr><td colspan='6' style='color:#888'>No outgoing challenges logged</td></tr>\n"
+
+    # Incoming table
+    in_rows = ""
+    for r in incoming:
+        rated_str = "Yes" if str(r.get("rated", "")).lower() in ("true", "yes", "1") else "No"
+        is_bot = str(r.get("opponent_is_bot", "")).lower() in ("true", "1")
+        bot_str = "Bot" if is_bot else "Human"
+        event = r.get("event", "")
+        if event == "accepted":
+            outcome_html = "<span style='color:#27ae60'>Accepted</span>"
+        else:
+            reason = r.get("decline_reason", "")
+            outcome_html = f"<span style='color:#e74c3c'>Declined</span>" + (f" <small>({reason})</small>" if reason else "")
+        in_rows += (
+            f"<tr><td>{r['time']}</td><td>{r['opponent']}</td>"
+            f"<td>{r.get('opponent_rating','')}</td><td>{bot_str}</td>"
+            f"<td>{r.get('time_control','')}</td><td>{rated_str}</td>"
+            f"<td>{outcome_html}</td></tr>\n"
+        )
+    if not in_rows:
+        in_rows = "<tr><td colspan='7' style='color:#888'>No incoming challenges logged</td></tr>\n"
+
+    return f"""
+<div class="section">
+<h2>Challenges Sent</h2>
+<table>
+  <tr><th>Time</th><th>Opponent</th><th>Time Control</th><th>Variant</th><th>Rated</th><th>Outcome</th></tr>
+  {out_rows}
+</table>
+</div>
+
+<div class="section">
+<h2>Challenges Received</h2>
+<table>
+  <tr><th>Time</th><th>Challenger</th><th>Rating</th><th>Type</th><th>Time Control</th><th>Rated</th><th>Outcome</th></tr>
+  {in_rows}
+</table>
+</div>
+"""
+
+
+def build_html(stats: dict, date_str: str, challenge_data: dict | None = None) -> str:
     s = stats
     record = f"{s['wins']}-{s['losses']}-{s['draws']}"
     net_sign = "+" if s["net_rating"] >= 0 else ""
@@ -312,6 +431,8 @@ def build_html(stats: dict, date_str: str) -> str:
 </table>
 </div>
 
+{build_challenge_html(challenge_data["outgoing"], challenge_data["incoming"]) if challenge_data else ""}
+
 <p style="margin-top:30px;color:#bbb;font-size:11px">
   Generated automatically by daily_summary.py
 </p>
@@ -386,6 +507,10 @@ def main() -> int:
 
     print(f"Fetched {len(games)} games", flush=True)
 
+    challenge_data = read_challenge_log(since_ms)
+    print(f"Challenge log: {len(challenge_data['outgoing'])} outgoing, "
+          f"{len(challenge_data['incoming'])} incoming", flush=True)
+
     if not games:
         subject = f"tombot1234 Daily Summary — {date_str} | No games"
         html = build_no_games_html(date_str)
@@ -394,7 +519,7 @@ def main() -> int:
         stats = parse_games(games)
         record_str = f"{stats['wins']}-{stats['losses']}-{stats['draws']}"
         subject = f"tombot1234 Daily Summary — {date_str} | {record_str}"
-        html = build_html(stats, date_str)
+        html = build_html(stats, date_str, challenge_data=challenge_data)
 
     try:
         send_email(sender, app_password, recipient, subject, html)

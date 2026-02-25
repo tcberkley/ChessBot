@@ -11,6 +11,7 @@ from lib import lichess
 from lib.config import Configuration
 from typing import Optional, Union
 from lib.types import UserProfileType, PerfType, EventType, FilterType
+from lib.challenge_logger import log_challenge
 MULTIPROCESSING_LIST_TYPE = Sequence[model.Challenge]
 DAILY_TIMERS_TYPE = list[Timer]
 LICHESS_TYPE = Union[lichess.Lichess, test_bot.lichess.Lichess]
@@ -117,6 +118,11 @@ class Matchmaking:
                 logger.error(response)
                 self.add_to_block_list(username)
                 self.show_earliest_challenge_time()
+            else:
+                tc = f"{base_time // 60}+{increment}" if (base_time or increment) else f"{days}d"
+                log_challenge(direction="outgoing", event="sent", opponent=username,
+                              time_control=tc, variant=variant,
+                              rated=(mode == "rated"), challenge_id=challenge_id)
             return challenge_id
         except Exception as e:
             logger.warning("Could not create challenge")
@@ -400,6 +406,15 @@ class Matchmaking:
         if reason_key not in decline_details:
             logger.warning(f"Unknown decline reason received: {reason_key}")
         game_problem = decline_details.get(reason_key, "") if self.challenge_filter == FilterType.FINE else ""
+        tc = f"{challenge.base // 60}+{challenge.increment}" if challenge.base is not None else ""
+        log_challenge(direction="outgoing", event="declined",
+                      opponent=opponent.name,
+                      opponent_rating=opponent.rating or "",
+                      opponent_is_bot=opponent.is_bot,
+                      time_control=tc, variant=challenge.variant,
+                      rated=challenge.rated,
+                      decline_reason=reason,
+                      challenge_id=challenge.id)
         self.add_challenge_filter(opponent.name, game_problem)
         logger.info(f"Will not challenge {opponent} to another {game_problem}".strip() + " game.")
 

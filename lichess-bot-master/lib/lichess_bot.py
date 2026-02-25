@@ -4,6 +4,7 @@ import chess
 import chess.pgn
 from chess.variant import find_variant
 from lib import engine_wrapper, model, lichess, matchmaking
+from lib.challenge_logger import log_challenge
 import json
 import logging
 import logging.handlers
@@ -533,6 +534,13 @@ def accept_challenges(li: LICHESS_TYPE, challenge_queue: MULTIPROCESSING_LIST_TY
             li.accept_challenge(chlng.id)
             active_games.add(chlng.id)
             log_proc_count("Queued", active_games)
+            tc = f"{int(chlng.base // 60)}+{chlng.increment}" if chlng.base is not None else ""
+            log_challenge(direction="incoming", event="accepted",
+                          opponent=chlng.challenger.name,
+                          opponent_rating=chlng.challenger.rating or "",
+                          opponent_is_bot=chlng.challenger.is_bot,
+                          time_control=tc, variant=chlng.variant,
+                          rated=chlng.rated, challenge_id=chlng.id)
         except (HTTPError, ReadTimeout) as exception:
             if isinstance(exception, HTTPError) and exception.response is not None and exception.response.status_code == 404:
                 logger.info(f"Skip missing {chlng}")
@@ -652,6 +660,14 @@ def handle_challenge(event: EventType, li: LICHESS_TYPE, challenge_queue: MULTIP
             recent_bot_challenges[chlng.challenger.name].append(Timer(seconds(time_window)))
     else:
         li.decline_challenge(chlng.id, reason=decline_reason)
+        tc = f"{int(chlng.base // 60)}+{chlng.increment}" if chlng.base is not None else ""
+        log_challenge(direction="incoming", event="declined",
+                      opponent=chlng.challenger.name,
+                      opponent_rating=chlng.challenger.rating or "",
+                      opponent_is_bot=chlng.challenger.is_bot,
+                      time_control=tc, variant=chlng.variant,
+                      rated=chlng.rated, decline_reason=decline_reason,
+                      challenge_id=chlng.id)
 
 
 @backoff.on_exception(backoff.expo, BaseException, max_time=600, giveup=lichess.is_final,  # type: ignore[arg-type]
