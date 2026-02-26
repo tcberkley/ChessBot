@@ -433,7 +433,7 @@ class Matchmaking:
         self.add_challenge_filter(opponent.name, game_problem)
         logger.info(f"Will not challenge {opponent} to another {game_problem}".strip() + " game.")
 
-        if reason_key in ("nobot", "casual"):
+        if reason_key in ("nobot", "casual", "variant"):
             try:
                 with open(NOBOT_BLOCK_FILE, "a") as f:
                     f.write(f"{opponent.name}\n")
