@@ -1,11 +1,52 @@
 Lichess Bot Setup:
     - Account: tombot1234
     - Engine: v20_engine (UCI protocol, Texel-tuned)
-    - Config: lichess-bot-master/config.yml
-    - Time controls: blitz, rapid, classical
-    - Matchmaking: auto-challenges other bots every 1 min; offers rematch after a win
-    - Uses Lichess opening explorer (masters) and online endgame tablebases (7-piece)
-    - Run with: cd lichess-bot-master && python lichess-bot.py
+    - Config: lichess-bot-master/config.yml (gitignored)
+    - Bridge: lichess-bot-master/ (Python, lichess-bot library)
+    - Server: Hetzner CPX11, root@178.156.243.29, Ubuntu 24.04
+    - Service: systemd lichess-bot
+    - Threads: 2 (Lazy SMP, both vCPUs used — set in config.yml uci_options)
+    - Uses Lichess opening explorer (masters, ≥500 games) and online EGTB (7-piece syzygy)
+
+Deploy a new engine version:
+    ssh-add ~/.ssh/id_ed25519                                         # SSH key is passphrase-protected
+    scp c_rewrite/vN_engine.c c_rewrite/Makefile root@178.156.243.29:~/c_rewrite/
+    ssh root@178.156.243.29 "cd ~/c_rewrite && make clean && make vN_engine"
+    ssh root@178.156.243.29 "sed -i 's|vOLD|vN|g' ~/lichess-bot-master/config.yml"
+    ssh root@178.156.243.29 "systemctl restart lichess-bot"
+    ssh root@178.156.243.29 "journalctl -u lichess-bot -n 20 --no-pager"
+    NEVER copy the Mac binary to the server — always recompile there (-march=native differs)
+
+Cron jobs (server):
+    0 0 * * *       systemctl restart lichess-bot   (midnight UTC — resets in-session decline filter)
+    0 23 * * *      daily_summary.py                (11 PM UTC game summary email)
+    */30 * * * *    join_bot_tournaments.py          (auto-join bot-eligible tournaments)
+    */15 * * * *    watchdog_lichess_bot.sh          (restart if silent >30 min)
+
+Challenge rules:
+    Incoming humans:  accepted at any rating (rated or casual)
+    Incoming bots:    rated only, within ±300 of tombot1234's rating in that time control
+    Outgoing (matchmaking): rated only, within ±200, min opponent rating 1600
+    Time controls offered: 30s, 1+0, 2+0, 2+1, 3+0, 3+1, 3+2, 5+0, 5+1, 5+2
+    Challenge timeout: 1.5 min between games
+    Decline filter: fine (per time-control per bot, resets at midnight restart)
+    Daily challenge limit: ~250 (Lichess API limit); auto-throttles
+
+Scripts:
+    scripts/daily_summary.py        — fetches last 24h games, emails HTML summary (W-L-D,
+                                      per-speed breakdown, game table, challenge log tables)
+    scripts/join_bot_tournaments.py — polls /api/tournament every 30 min, joins botsAllowed ones
+                                      requires LICHESS_TOURNAMENT_TOKEN (tournament:write scope)
+    scripts/watchdog_lichess_bot.sh — restarts lichess-bot if journalctl silent >30 min
+    lib/challenge_logger.py         — appends outgoing/incoming challenge events to
+                                      /root/scripts/challenge_log.csv at runtime
+
+Environment variables (lichess-bot-master/.env on server):
+    LICHESS_BOT_TOKEN              bot:play scope
+    LICHESS_TOURNAMENT_TOKEN       tournament:write scope
+    SUMMARY_EMAIL_SENDER           Gmail sender address
+    SUMMARY_EMAIL_APP_PASSWORD     Gmail App Password
+    SUMMARY_EMAIL_TO               recipient (default: tcberkley@gmail.com)
 
 
 Streaming Deadlock Fix (2026-02-22):
