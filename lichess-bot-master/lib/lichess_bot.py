@@ -4,7 +4,7 @@ import chess
 import chess.pgn
 from chess.variant import find_variant
 from lib import engine_wrapper, model, lichess, matchmaking
-from lib.challenge_logger import log_challenge
+from lib.challenge_logger import log_challenge, format_tc
 import json
 import logging
 import logging.handlers
@@ -534,7 +534,7 @@ def accept_challenges(li: LICHESS_TYPE, challenge_queue: MULTIPROCESSING_LIST_TY
             li.accept_challenge(chlng.id)
             active_games.add(chlng.id)
             log_proc_count("Queued", active_games)
-            tc = f"{int(chlng.base // 60)}+{chlng.increment}" if chlng.base is not None else ""
+            tc = format_tc(chlng.base or 0, chlng.increment or 0, chlng.days or 0) if chlng.base is not None else ""
             log_challenge(direction="incoming", event="accepted",
                           opponent=chlng.challenger.name,
                           opponent_rating=chlng.challenger.rating or "",

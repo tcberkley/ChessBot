@@ -11,7 +11,7 @@ from lib import lichess
 from lib.config import Configuration
 from typing import Optional, Union
 from lib.types import UserProfileType, PerfType, EventType, FilterType
-from lib.challenge_logger import log_challenge
+from lib.challenge_logger import log_challenge, format_tc
 
 NOBOT_BLOCK_FILE = "/root/scripts/nobot_block.txt"
 MULTIPROCESSING_LIST_TYPE = Sequence[model.Challenge]
@@ -131,7 +131,7 @@ class Matchmaking:
                 self.add_to_block_list(username)
                 self.show_earliest_challenge_time()
             else:
-                tc = f"{base_time // 60}+{increment}" if (base_time or increment) else f"{days}d"
+                tc = format_tc(base_time, increment, days)
                 log_challenge(direction="outgoing", event="sent", opponent=username,
                               time_control=tc, variant=variant,
                               rated=(mode == "rated"), challenge_id=challenge_id)
@@ -418,7 +418,7 @@ class Matchmaking:
         if reason_key not in decline_details:
             logger.warning(f"Unknown decline reason received: {reason_key}")
         game_problem = decline_details.get(reason_key, "") if self.challenge_filter == FilterType.FINE else ""
-        tc = f"{challenge.base // 60}+{challenge.increment}" if challenge.base is not None else ""
+        tc = format_tc(challenge.base or 0, challenge.increment or 0, getattr(challenge, "days", 0) or 0) if challenge.base is not None else ""
         log_challenge(direction="outgoing", event="declined",
                       opponent=opponent.name,
                       opponent_rating=opponent.rating or "",

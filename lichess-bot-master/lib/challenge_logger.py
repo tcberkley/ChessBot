@@ -3,6 +3,20 @@ import csv
 import os
 from datetime import datetime, timezone
 
+
+def format_tc(base: int, increment: int, days: int = 0) -> str:
+    """Format a time control as a human-readable string (e.g. '½+0', '3+2', '1d')."""
+    if not (base or increment):
+        return f"{days}d" if days else ""
+    mins = base / 60
+    if mins == int(mins):
+        mins_str = str(int(mins))
+    elif base == 30:
+        mins_str = "½"
+    else:
+        mins_str = f"{mins:.2g}"
+    return f"{mins_str}+{increment}"
+
 CSV_PATH = "/root/scripts/challenge_log.csv"
 FIELDNAMES = [
     "timestamp_utc", "direction", "event", "opponent", "opponent_rating",
