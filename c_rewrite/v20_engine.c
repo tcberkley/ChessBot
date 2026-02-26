@@ -282,7 +282,8 @@ __thread int se_excluded_move;
 int quit = 0;
 
 // v13 search stop flag (declared here so read_input can use it, defined in search section)
-int v14_stopped = 0;
+volatile int v14_stopped = 0;
+int is_pondering = 0;   // set 1 on "go ... ponder", cleared by "ponderhit"
 
 // UCI "movestogo" command moves counter
 int movestogo = 30;
@@ -306,7 +307,7 @@ int stoptime = 0;
 int timeset = 0;
 
 // variable to flag when the time is up
-int stopped = 0;
+volatile int stopped = 0;
 
 
 /**********************************\
@@ -418,6 +419,14 @@ void read_input()
             }
             else if (!strncmp(input, "stop", 4))
             {
+                stopped = 1;
+                v14_stopped = 1;
+            }
+            else if (!strncmp(input, "ponderhit", 9))
+            {
+                // Opponent played our predicted move — stop infinite ponder search.
+                // lichess-bot will immediately send "go wtime ... btime ..." next.
+                is_pondering = 0;
                 stopped = 1;
                 v14_stopped = 1;
             }
@@ -4674,8 +4683,11 @@ void search_position(int max_depth, int time_budget_ms)
 
         if (v14_stopped) break;
 
-        // This depth completed successfully — save the best move
-        if (pv_length[0] > 0)
+        // This depth completed successfully — save the best move.
+        // Use pv_table[0][0] directly (not pv_length[0]>0) because pv_length[0] can be
+        // incorrectly left at 0 when v14_stopped fires in a child before pv_length[ply]=ply
+        // executes (line 4085 check fires before line 4088 init).
+        if (pv_table[0][0])
             best_move_found = pv_table[0][0];
 
         // v16: score instability / easy move detection
@@ -4734,14 +4746,20 @@ done:
             pthread_join(worker_threads[i], NULL);
     }
 
-    // Print best move (use saved move, not pv_table which may be from incomplete depth)
+    // Print best move. Prefer the saved cross-depth best move; fall back to
+    // pv_table[0][0] (safe since it's memset'd to 0 at search start).
+    int bm = best_move_found ? best_move_found : pv_table[0][0];
+
     printf("bestmove ");
-    if (best_move_found)
-        print_move(best_move_found);
-    else if (pv_length[0] > 0)
-        print_move(pv_table[0][0]);
-    else
-        printf("0000");
+    if (bm) print_move(bm);
+    else printf("0000");
+
+    // Append ponder move (PV[1]) if available — lets GUI send "go ponder" on next turn
+    if (bm && pv_length[0] >= 2 && pv_table[0][1]) {
+        printf(" ponder ");
+        print_move(pv_table[0][1]);
+    }
+
     printf("\n");
     fflush(stdout);
 }
@@ -4823,9 +4841,54 @@ void parse_position(char *command)
     }
 }
 
+// Thread function for ponder search — runs search_position() in background so the
+// UCI loop's main thread can keep reading stdin and detect stop/ponderhit.
+// Board state is TLS (__thread), so we must copy it from the master snapshot
+// (saved by the main thread before pthread_create) into this thread's TLS.
+static void *ponder_search_thread(void *arg)
+{
+    (void)arg;
+    copy_master_to_thread();  // populate this thread's TLS board from the main thread
+    search_position(30, 0);   // infinite search; prints bestmove when v14_stopped fires
+    return NULL;
+}
+
 // Parse UCI "go" command with v13's time management
 void parse_go(char *command)
 {
+    // "go ponder" = infinite search on opponent's time.
+    // Run in a background thread so the UCI loop can read "stop" or "ponderhit" from stdin.
+    // "go wtime X btime Y ponder" = normal timed search (fall through to time-control parsing).
+    if (strncmp(command, "go ponder", 9) == 0) {
+        is_pondering = 1;
+
+        // Snapshot the current board into master_* so ponder_search_thread can
+        // copy_master_to_thread() — all board state (bitboards, side, etc.) is __thread TLS.
+        save_board_to_master();
+
+        // Start ponder search in background
+        pthread_t ponder_th;
+        pthread_create(&ponder_th, NULL, ponder_search_thread, NULL);
+
+        // Block on the next UCI command (stop or ponderhit)
+        char ponder_cmd[2000] = "";
+        if (fgets(ponder_cmd, sizeof(ponder_cmd), stdin)) {
+            char *nl = strchr(ponder_cmd, '\n');
+            if (nl) *nl = '\0';
+            if (!strncmp(ponder_cmd, "quit", 4))
+                quit = 1;
+            // Both "stop" and "ponderhit" just stop the ponder search here.
+            // After bestmove is output, the GUI sends the real "go wtime..." for the search.
+        }
+
+        // Signal ponder search to stop and wait for it to print bestmove
+        v14_stopped = 1;
+        stopped = 1;
+        is_pondering = 0;
+        pthread_join(ponder_th, NULL);
+        return;
+    }
+
     int depth = -1;
     int wtime = -1, btime = -1, winc = 0, binc = 0;
     int movetime = -1;
@@ -5014,6 +5077,7 @@ void uci_loop()
             printf("id name v20\n");
             printf("id author tomberkley\n");
             printf("option name Threads type spin default 1 min 1 max %d\n", MAX_THREADS);
+            printf("option name UCI_Ponder type check default false\n");
             printf("uciok\n");
             fflush(stdout);
         }
