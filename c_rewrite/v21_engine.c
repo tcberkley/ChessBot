@@ -4917,15 +4917,64 @@ void parse_go(char *command)
         pthread_t ponder_th;
         pthread_create(&ponder_th, NULL, ponder_search_thread, NULL);
 
-        // Block on the next UCI command (stop or ponderhit)
+        // Read commands until we receive stop, ponderhit, or a position command.
+        //
+        // The normal cases are:
+        //   "stop"      — opponent played a different move (ponder miss)
+        //   "ponderhit" — opponent played the predicted move (ponder hit)
+        //
+        // Edge case: the ponder search can complete ALL depths naturally (e.g. finds
+        // forced mate in a simple endgame) and output bestmove BEFORE stop/ponderhit
+        // arrives.  python-chess sees the ponder bestmove, ends the ponder command
+        // without calling cancel(), and the new play() command's start() goes straight
+        // to sending "position fen... moves..." followed by "go wtime... btime...".
+        // If we naively read only one line here we would consume "position fen..." and
+        // discard it, then parse_go() would search from the stale ponder board —
+        // exactly the bug that caused the bot to play an illegal move (e5d6).
+        //
+        // We also handle "isready" gracefully in case the GUI sends it for sync.
         char ponder_cmd[2000] = "";
-        if (fgets(ponder_cmd, sizeof(ponder_cmd), stdin)) {
+        while (fgets(ponder_cmd, sizeof(ponder_cmd), stdin)) {
             char *nl = strchr(ponder_cmd, '\n');
             if (nl) *nl = '\0';
-            if (!strncmp(ponder_cmd, "quit", 4))
+
+            if (!strncmp(ponder_cmd, "quit", 4)) {
                 quit = 1;
-            // Both "stop" and "ponderhit" just stop the ponder search here.
-            // After bestmove is output, the GUI sends the real "go wtime..." for the search.
+                break;
+            } else if (!strncmp(ponder_cmd, "stop", 4) ||
+                       !strncmp(ponder_cmd, "ponderhit", 9)) {
+                // Normal stop or ponderhit — fall through to stop the ponder thread.
+                break;
+            } else if (!strncmp(ponder_cmd, "isready", 7)) {
+                printf("readyok\n");
+                fflush(stdout);
+                // Keep reading; the real stop/ponderhit/position is next.
+            } else if (!strncmp(ponder_cmd, "position", 8)) {
+                // Ponder search finished early (natural completion) and python-chess
+                // sent "position" directly without a prior "stop".  Stop the ponder
+                // thread, apply the actual game position, then read and execute the
+                // "go" command so the search uses the correct board.
+                v14_stopped = 1;
+                stopped = 1;
+                is_pondering = 0;
+                pthread_join(ponder_th, NULL);
+
+                parse_position(ponder_cmd);
+
+                char go_cmd[2000] = "";
+                while (fgets(go_cmd, sizeof(go_cmd), stdin)) {
+                    char *nl2 = strchr(go_cmd, '\n');
+                    if (nl2) *nl2 = '\0';
+                    if (!strncmp(go_cmd, "quit", 4)) { quit = 1; break; }
+                    if (!strncmp(go_cmd, "isready", 7)) {
+                        printf("readyok\n"); fflush(stdout); continue;
+                    }
+                    if (!strncmp(go_cmd, "go", 2)) { parse_go(go_cmd); break; }
+                    // Unknown command between position and go — ignore and keep reading.
+                }
+                return;
+            }
+            // Unknown/unhandled command — ignore and keep reading.
         }
 
         // Signal ponder search to stop and wait for it to print bestmove

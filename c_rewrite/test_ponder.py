@@ -9,6 +9,11 @@ Suite 2: Full go-ponder → ponderhit cycle yields a valid bestmove.
 Suite 3: Full go-ponder → stop cycle yields a valid bestmove.
 Suite 4: TT collision stress — same positions run repeatedly without clearing
          TT, verifying no illegal moves appear even under heavy hash reuse.
+Suite 5: Early-finish ponder — ponder search completes naturally (all depths),
+         then the GUI sends 'position' directly without a prior 'stop'.  Engine
+         must apply the new position, not search from the stale ponder board.
+         Regression test for the bug that caused the bot to play e5d6 (illegal)
+         in game 2Vd9Wura while winning by a large margin.
 
 Usage:
     python3 c_rewrite/test_ponder.py [path/to/v21_engine]
@@ -68,6 +73,47 @@ POSITIONS = [
     "5k2/8/5K2/8/5P2/8/8/8 w - - 0 1",
     "3k4/3p4/8/8/8/8/3P4/3K4 w - - 0 1",
     "8/8/3k4/8/3K4/8/4P3/8 w - - 0 1",
+]
+
+# ── Suite 5 positions ─────────────────────────────────────────────────────────
+# (ponder_fen, actual_fen, forbidden_move_or_None, label)
+#
+# ponder_fen: board the engine searches during go ponder
+# actual_fen: the real game position the GUI sends after the ponder search ends
+# forbidden:  a move that must NOT be chosen (it's legal in ponder_fen but
+#             illegal or wrong in actual_fen) — None means just check legality
+#
+EARLY_FINISH_CASES = [
+    # Simple K+R vs K endgame: ponder search finds forced mate and completes all
+    # 30 depths in milliseconds.  The actual position is a different K+R vs K.
+    (
+        "8/8/1k6/8/8/2K5/8/1R6 w - - 0 1",  # ponder from here
+        "8/8/8/5k2/8/5K2/8/1R6 w - - 0 1",  # actual (different) position
+        None,
+        "KR vs K — simple endgame, early finish",
+    ),
+    # Game 2Vd9Wura bug reproduction.
+    # White played b5b6 (move 58). Engine predicted Black would play Nd6 (e8d6).
+    # Ponder board: after b5b6 + e8d6  → knight on d6, bishop still on g6.
+    #   In this board Ke5d6 (e5d6) = Kxd6 is LEGAL.
+    # Black actually played Be4 (g6e4).
+    # Actual board: after b5b6 + g6e4  → knight still on e8, bishop on e4.
+    #   In actual board e5d6 is ILLEGAL (knight on e8 attacks d6).
+    # Bug: engine searched from ponder board → played e5d6 → python-chess crash.
+    (
+        "5k2/4R3/1P1n1Pb1/4K3/2P4B/8/P7/8 w - - 1 59",  # ponder (b5b6 + Nd6)
+        "4nk2/4R3/1P3P2/4K3/2P1b2B/8/P7/8 w - - 1 59",  # actual (b5b6 + Be4)
+        "e5d6",  # this move is illegal in actual position — must not be played
+        "Game 2Vd9Wura bug: e5d6 must NOT be played in actual position",
+    ),
+    # A middlegame ponder position with a different actual position.
+    # Tests the case where the ponder search is still running when position arrives.
+    (
+        "r1bqk2r/pppp1ppp/2n2n2/4p3/2B1P3/5N2/PPPP1PPP/RNBQK2R w KQkq - 4 4",
+        "r1bqkb1r/pppp1ppp/2n2n2/4p3/2B1P3/5N2/PPPP1PPP/RNBQK2R w KQkq - 4 4",
+        None,
+        "Middlegame: ponder running when position arrives",
+    ),
 ]
 
 # Positions for TT collision stress — complex tactical positions run without
@@ -404,6 +450,80 @@ def suite4_tt_stress(eng, bug_positions, repeats=4):
     return passed, total, failures
 
 
+# ── Suite 5: Early-finish ponder (position sent without stop) ─────────────────
+
+def suite5_early_finish(eng, cases):
+    """Ponder search completes naturally → GUI sends 'position' without 'stop'.
+
+    The engine must use the new position for its search, not the stale ponder
+    board.  This is the root cause of the game 2Vd9Wura illegal-move bug.
+    """
+    passed = 0
+    failures = []
+    total = len(cases)
+
+    print("Suite 5 — Early-finish ponder (position without stop):")
+
+    for i, (ponder_fen, actual_fen, forbidden, label) in enumerate(cases):
+        eng.new_game()
+
+        # Start pondering from ponder_fen.
+        eng.send(f"position fen {ponder_fen}")
+        eng.send("go ponder")
+
+        # Wait up to 3 s for the ponder search to finish naturally (simple
+        # positions will complete all 30 depths in < 100 ms).
+        ponder_bm, _ = eng.wait_bestmove(timeout=3.0)
+        early = ponder_bm is not None
+
+        # Simulate what python-chess does: send 'position <actual>' + 'go'
+        # WITHOUT a prior 'stop'.  (After the ponder search finishes naturally,
+        # python-chess sends position+go directly instead of stop+position+go.)
+        eng.send(f"position fen {actual_fen}")
+        eng.send("go movetime 200")
+
+        # Collect all bestmoves that arrive in the next 5 seconds.
+        # If the ponder search was still running: two bestmoves will appear —
+        #   first from the stopped ponder thread (ponder board), then the real one.
+        # If the ponder search had already finished: only one bestmove arrives.
+        # In all cases the LAST bestmove is the real answer from actual_fen.
+        last_bm = None
+        deadline = time.time() + 5.0
+        while time.time() < deadline:
+            bm, _ = eng.wait_bestmove(timeout=0.5)
+            if bm is None:
+                break
+            last_bm = bm
+
+        board = chess.Board(actual_fen)
+        early_str = " (early-finish)" if early else " (ponder running)"
+
+        if last_bm is None:
+            failures.append((ponder_fen, f"{label}: no bestmove received"))
+            print(f"  case {i+1}: FAIL — no bestmove{early_str} [{label}]")
+            continue
+
+        if not is_legal(board, last_bm):
+            failures.append(
+                (ponder_fen, f"{label}: bestmove {last_bm!r} is ILLEGAL in actual pos")
+            )
+            print(f"  case {i+1}: FAIL — {last_bm!r} ILLEGAL{early_str} [{label}]")
+            continue
+
+        if forbidden and last_bm == forbidden:
+            failures.append(
+                (ponder_fen, f"{label}: bestmove {last_bm!r} is the forbidden stale-board move")
+            )
+            print(f"  case {i+1}: FAIL — played forbidden {last_bm!r}{early_str} [{label}]")
+            continue
+
+        passed += 1
+        print(f"  case {i+1}: bm={last_bm} [ok]{early_str} [{label}]")
+
+    print(f"  Result: {passed}/{total} passed")
+    return passed, total, failures
+
+
 # ── Main ───────────────────────────────────────────────────────────────────────
 
 def main():
@@ -440,6 +560,10 @@ def main():
     p, t, f = suite4_tt_stress(eng, BUG_POSITIONS, repeats=4)
     total_passed += p; total_tests += t; all_failures += f
 
+    print()
+    p, t, f = suite5_early_finish(eng, EARLY_FINISH_CASES)
+    total_passed += p; total_tests += t; all_failures += f
+
     eng.close()
 
     print()
@@ -456,7 +580,7 @@ def main():
         print("SOME TESTS FAILED")
         sys.exit(1)
     else:
-        print("ALL TESTS PASSED")
+        print(f"ALL TESTS PASSED ({total_passed}/{total_tests})")
         sys.exit(0)
 
 
