@@ -4777,15 +4777,28 @@ done:
     // pv_table[0][0] (safe since it's memset'd to 0 at search start).
     int bm = best_move_found ? best_move_found : pv_table[0][0];
 
+    // Validate ponder move: temporarily apply bestmove and check legality.
+    // This catches any case where the engine's board was wrong (wrong ponder position,
+    // TT collision, etc.) and prevents python-chess from starting a ponder on a bad position.
+    int validated_ponder = 0;
+    if (bm && best_ponder_move) {
+        copy_board();
+        if (make_move(bm, all_moves)) {
+            // Side has flipped — verify ponder belongs to the new side to move,
+            // is on its source square, and doesn't capture an own piece.
+            if (is_tt_move_valid(best_ponder_move))
+                validated_ponder = best_ponder_move;
+        }
+        take_back();
+    }
+
     printf("bestmove ");
     if (bm) print_move(bm);
     else printf("0000");
 
-    // Append ponder move if available — lets GUI send "go ponder" on next turn.
-    // Use best_ponder_move (saved from a completed depth) not raw pv_table[0][1] (may be stale).
-    if (bm && best_ponder_move) {
+    if (validated_ponder) {
         printf(" ponder ");
-        print_move(best_ponder_move);
+        print_move(validated_ponder);
     }
 
     printf("\n");
@@ -4861,7 +4874,13 @@ void parse_position(char *command)
             repetition_index++;
             repetition_table[repetition_index] = hash_key;
 
-            make_move(move, all_moves);
+            if (!make_move(move, all_moves)) {
+                // make_move() called take_back() internally; board is restored.
+                // This should never happen for valid game positions, but if it does,
+                // stop processing rather than silently continuing with the wrong board.
+                repetition_index--;
+                break;
+            }
 
             while (*current_char && *current_char != ' ') current_char++;
             current_char++;
