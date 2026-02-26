@@ -12,6 +12,8 @@ from lib.config import Configuration
 from typing import Optional, Union
 from lib.types import UserProfileType, PerfType, EventType, FilterType
 from lib.challenge_logger import log_challenge
+
+NOBOT_BLOCK_FILE = "/root/scripts/nobot_block.txt"
 MULTIPROCESSING_LIST_TYPE = Sequence[model.Challenge]
 DAILY_TIMERS_TYPE = list[Timer]
 LICHESS_TYPE = Union[lichess.Lichess, test_bot.lichess.Lichess]
@@ -72,6 +74,16 @@ class Matchmaking:
 
         for name in self.matchmaking_cfg.block_list:
             self.add_to_block_list(name)
+
+        # Load persistent structural block list (noBot / casual declines)
+        try:
+            with open(NOBOT_BLOCK_FILE) as f:
+                for name in f:
+                    name = name.strip()
+                    if name:
+                        self.add_to_block_list(name)
+        except FileNotFoundError:
+            pass
 
         # Rematch tracking: offer one immediate rematch after a win, but not after a rematch win
         self.rematch_opponent: Optional[str] = None
@@ -417,6 +429,14 @@ class Matchmaking:
                       challenge_id=challenge.id)
         self.add_challenge_filter(opponent.name, game_problem)
         logger.info(f"Will not challenge {opponent} to another {game_problem}".strip() + " game.")
+
+        if reason_key in ("nobot", "casual"):
+            try:
+                with open(NOBOT_BLOCK_FILE, "a") as f:
+                    f.write(f"{opponent.name}\n")
+                logger.info(f"Persistently blocked {opponent.name} ({reason_key} decline)")
+            except Exception:
+                pass
 
         self.show_earliest_challenge_time()
 
