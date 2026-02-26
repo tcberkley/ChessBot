@@ -328,8 +328,7 @@ class Matchmaking:
     def game_done(self, opponent: str = "", won: bool = False,
                   base_time: int = 0, increment: int = 0, days: int = 0, mode: str = "rated",
                   opponent_rating: int = 0, my_rating: int = 0) -> None:
-        """Reset the timer for when the last game ended, and prints the earliest that the next challenge will be created."""
-        self.last_game_ended_delay.reset()
+        """Challenge as soon as min_wait_time passes after a game ends."""
         upset_win = won and opponent_rating > my_rating > 0
         if won and opponent and opponent != self.last_rematched_opponent and upset_win:
             logger.info(f"Won against higher-rated {opponent} ({opponent_rating} vs {my_rating}) — queuing rematch.")
