@@ -261,7 +261,10 @@ class Matchmaking:
             return all(self.should_accept_challenge(bot["username"], aspect) for aspect in aspects)
 
         ready_bots = list(filter(ready_for_challenge, online_bots))
+        skipped = len(online_bots) - len(ready_bots)
         online_bots = ready_bots or online_bots
+        skip_note = f" ({skipped} skipped by filter)" if skipped and ready_bots else ""
+        logger.info(f"Random pool: {len(online_bots)} bot(s){skip_note}")
         bot_username = None
         weights = self.get_weights(online_bots, rating_preference, min_rating, max_rating, game_type)
 
