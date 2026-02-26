@@ -1,6 +1,6 @@
 # Chess Bot — tombot1234
 
-A chess bot running on Lichess, powered by a custom C engine with magic bitboards, advanced search, and Texel-tuned evaluation.
+A chess bot running on Lichess
 
 **Challenge it here:** [lichess.org/@/tombot1234](https://lichess.org/@/tombot1234)
 
