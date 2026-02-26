@@ -27,7 +27,3 @@ A chess bot running on Lichess
 - Auto-challenges other bots; offers rematch after winning
 - Daily game summary email
 - Automatically joins bot-eligible Lichess tournaments
-
----
-
-*Technical details, deployment instructions, and version history are in `notes.txt`.*
