@@ -29,8 +29,8 @@ import subprocess
 import sys
 import time
 
-ENGINE_V20 = "./v22_engine"
-ENGINE_V19 = "./v21_engine"
+ENGINE_V20 = None  # set from args.engine1
+ENGINE_V19 = None  # set from args.engine2
 
 # ── UCI engine wrapper ────────────────────────────────────────────────────────
 
@@ -148,15 +148,24 @@ def main():
     parser.add_argument("--benchmark",     action="store_true")
     parser.add_argument("--seed",          type=int,   default=42)
     parser.add_argument("--hours",         type=float, default=7.5)
+    parser.add_argument("--engine1",       type=str,   default="./v22_engine",
+                        help="Path to engine 1 (new/test)")
+    parser.add_argument("--engine2",       type=str,   default="./v21_engine",
+                        help="Path to engine 2 (baseline)")
     args = parser.parse_args()
 
     rng = random.Random(args.seed)
 
+    e1_path = args.engine1
+    e2_path = args.engine2
+    e1_name = e1_path.lstrip("./").replace("_engine", "")
+    e2_name = e2_path.lstrip("./").replace("_engine", "")
+
     print(f"Starting engines...", flush=True)
-    v22 = Engine(ENGINE_V20, "v22")
-    v21 = Engine(ENGINE_V19, "v21")
-    print(f"  v22: {ENGINE_V20}", flush=True)
-    print(f"  v21: {ENGINE_V19}", flush=True)
+    v22 = Engine(e1_path, e1_name)
+    v21 = Engine(e2_path, e2_name)
+    print(f"  engine1 ({e1_name}): {e1_path}", flush=True)
+    print(f"  engine2 ({e2_name}): {e2_path}", flush=True)
     print(f"  Depth: {args.depth}  Max half-moves: {args.moves}  Opening plies: {args.plies}", flush=True)
 
     # ── Benchmark: time 2 games, report and exit ──────────────────────────────
@@ -201,11 +210,11 @@ def main():
 
     # ── Tournament ────────────────────────────────────────────────────────────
     print(f"\n{'='*65}", flush=True)
-    print(f"  v22 vs v21 — {args.openings} openings × 2 colors = {args.openings*2} games", flush=True)
+    print(f"  {e1_name} vs {e2_name} — {args.openings} openings × 2 colors = {args.openings*2} games", flush=True)
     print(f"  Depth: {args.depth}   Opening plies: {args.plies}", flush=True)
     print(f"{'='*65}", flush=True)
-    print(f"{'Game':>5}  {'Opening':>7}  {'v22 Color':>9}  {'Result':>8}  "
-          f"{'v22 Score':>9}  {'W':>4} {'D':>4} {'L':>4}  Elapsed", flush=True)
+    print(f"{'Game':>5}  {'Opening':>7}  {e1_name+' Color':>12}  {'Result':>8}  "
+          f"{e1_name+' Score':>12}  {'W':>4} {'D':>4} {'L':>4}  Elapsed", flush=True)
     print(f"{'-'*65}", flush=True)
 
     v22_score = 0.0
@@ -245,7 +254,7 @@ def main():
             eta = elapsed / game_num * (total_games - game_num) if game_num > 0 else 0
 
             print(f"{game_num:>5}  {i+1:>7}  {color_str:>9}  {res_str:>8}  "
-                  f"{v22_score:>9.1f}  {wins:>4} {draws:>4} {losses:>4}  "
+                  f"{v22_score:>12.1f}  {wins:>4} {draws:>4} {losses:>4}  "
                   f"{elapsed/3600:.2f}h  ETA {eta/3600:.2f}h", flush=True)
 
             v22.new_game()
@@ -257,8 +266,8 @@ def main():
     pct = 100 * v22_score / total if total > 0 else 0
 
     print(f"\n{'='*65}", flush=True)
-    print(f"  FINAL RESULT — v22 vs v21  ({total} games)", flush=True)
-    print(f"  v22: {wins}W / {draws}D / {losses}L  =  {v22_score:.1f}/{total}  ({pct:.1f}%)", flush=True)
+    print(f"  FINAL RESULT — {e1_name} vs {e2_name}  ({total} games)", flush=True)
+    print(f"  {e1_name}: {wins}W / {draws}D / {losses}L  =  {v22_score:.1f}/{total}  ({pct:.1f}%)", flush=True)
     print(f"  Elapsed: {elapsed/3600:.2f}h", flush=True)
     print(f"{'='*65}", flush=True)
 
