@@ -2782,7 +2782,7 @@ const int v14_piece_values[12] = {
 // The UCI engine reads from tp[] normally. The tuner binary (compiled with -DTUNER)
 // modifies tp[] in place during coordinate descent and writes optimized values on exit.
 
-#define TP_COUNT 744
+#define TP_COUNT 747
 
 // PST accessor macros (indices into tp[])
 #define TP_PST_PAWN_MG(i)   tp[0   + (i)]
@@ -2838,6 +2838,9 @@ const int v14_piece_values[12] = {
 #define TP_KING_MOB       tp[741]
 #define TP_MOPUP_CRN      tp[742]
 #define TP_MOPUP_KDIST    tp[743]
+#define TP_EG_OPP_BISH    tp[744]   // Endgame scaling: opp-color bishop scale (out of 128)
+#define TP_EG_ROOK_BASE   tp[745]   // Endgame scaling: lone rook base scale (out of 128)
+#define TP_EG_ROOK_PAWN   tp[746]   // Endgame scaling: lone rook per-pawn addition
 
 int tp[TP_COUNT] = {
     // [0..63] pst_pawn_mg — v20 Texel-tuned (epoch 28, MSE=0.19530318)
@@ -2980,6 +2983,9 @@ int tp[TP_COUNT] = {
       0,  // [741] TP_KING_MOB
      12,  // [742] TP_MOPUP_CRN
       7,  // [743] TP_MOPUP_KDIST
+     93,  // [744] TP_EG_OPP_BISH  (opp-color bishop scale, 93/128 = 72.7%, Texel-tuned)
+    109,  // [745] TP_EG_ROOK_BASE (lone rook base scale, 109/128 = 85.2%, Texel-tuned)
+      0,  // [746] TP_EG_ROOK_PAWN (per-pawn addition to rook scale, Texel-tuned)
 };
 
 // Precomputed integer sqrt*20 table for mobility scoring
@@ -3628,12 +3634,12 @@ static inline int evaluate()
             int wsq = get_ls1b_index(bitboards[B]);
             int bsq = get_ls1b_index(bitboards[b]);
             if (((wsq ^ bsq) & 1) != 0)   // opposite color squares
-                scale = 96;   // 96/128 = 75%
+                scale = TP_EG_OPP_BISH;
         }
         // Lone rook each side
         int tot_pawns = count_bits(bitboards[P]) + count_bits(bitboards[p]);
         if (wr==1 && br==1 && wb==0 && bb2==0 && wn==0 && bn==0 && wq==0 && bq==0) {
-            scale = 112 + tot_pawns * 2;  // 112-128
+            scale = TP_EG_ROOK_BASE + tot_pawns * TP_EG_ROOK_PAWN;
             if (scale > 128) scale = 128;
         }
 
@@ -5374,7 +5380,13 @@ static void clamp_params() {
     if (tp[740] < 0) tp[740] = 0;  // KPASS_ENE
     if (tp[741] < 0) tp[741] = 0;  // KING_MOB
     if (tp[742] < 0) tp[742] = 0;  // MOPUP_CRN
-    if (tp[743] < 0) tp[743] = 0;  // MOPUP_KDIST
+    if (tp[743] < 0)   tp[743] = 0;   // MOPUP_KDIST
+    if (tp[744] < 64)  tp[744] = 64;  // EG_OPP_BISH: at least 50% scaling
+    if (tp[744] > 128) tp[744] = 128;
+    if (tp[745] < 64)  tp[745] = 64;  // EG_ROOK_BASE: at least 50% base
+    if (tp[745] > 128) tp[745] = 128;
+    if (tp[746] < 0)   tp[746] = 0;   // EG_ROOK_PAWN: non-negative
+    if (tp[746] > 8)   tp[746] = 8;
 }
 
 static void calibrate_K() {
@@ -5430,6 +5442,10 @@ static void print_params(double mse, int epoch) {
     for (int i = 0; i < 40; i++) {
         printf("  tp[%d] = %4d  // %s\n", 704 + i, tp[704 + i], snames[i]);
     }
+    // New v23 endgame scaling params
+    printf("  tp[744] = %4d  // EG_OPP_BISH\n",  tp[744]);
+    printf("  tp[745] = %4d  // EG_ROOK_BASE\n", tp[745]);
+    printf("  tp[746] = %4d  // EG_ROOK_PAWN\n", tp[746]);
     fflush(stdout);
 }
 
