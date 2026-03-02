@@ -1,6 +1,6 @@
 Lichess Bot Setup:
     - Account: tombot1234
-    - Engine: v20_engine (UCI protocol, Texel-tuned)
+    - Engine: v23_engine (UCI protocol, Texel-tuned)
     - Config: lichess-bot-master/config.yml (gitignored)
     - Bridge: lichess-bot-master/ (Python, lichess-bot library)
     - Server: Hetzner CPX11, root@178.156.243.29, Ubuntu 24.04
@@ -98,10 +98,14 @@ Running the Bot:
 
 Feature Candidates:
     Ranked by estimated Elo gain. Ranges are rough — small samples have wide CIs.
-    Already done: Texel tuning (v20), pondering (v21), continuous time scaling +
-    clock differential scaling (v22), razoring, history-adjusted LMR, LMP,
-    king tropism, passed pawn king proximity, candidate passed pawns, mop-up eval,
-    threat detection (pawn attacks on undefended enemy pieces).
+    Already done: Texel tuning (v20), pondering (v21), clock differential TM (v22),
+    razoring, history-adjusted LMR, LMP, king tropism, passed pawn king proximity,
+    candidate passed pawns, mop-up eval, threat detection (v19);
+    Mate Distance Pruning (v23, +11 Elo), ETT cache (v23, +43 Elo combined w/MDP),
+    Endgame scaling opp-color bishops + lone rooks (v23, Texel-tuned to 93/109/0).
+    Tested + skipped: Free Passer (MSE worse, doubles PSTs), Correction History
+    (46% game test, regression), Safe Check Bonuses (MSE flat), Virtual Mobility
+    (MSE marginally worse).
 
     --- Search ---
 
@@ -112,32 +116,31 @@ Feature Candidates:
         0-99cp (N/B/R) and 0-300cp (Q). This is the single biggest missing
         eval term vs stronger engines.
 
-    Correction history                     ~20-30 Elo
+    Correction history                     ~20-30 Elo  [TESTED v23: 46% game test, SKIP]
         Five hash tables that adjust static eval based on position features:
         pawn structure (pawn hash), non-pawn material by color, minor pieces,
         overall material, and continuation moves. Each table is a running
         average, weighted more for deeper searches. Applied before any
         pruning decisions. +46 Elo for pawn correction alone in Simbelmyne.
+        Note: tested with simple EMA approach (±8cp cap); regressed vs v22.
+        May need more careful implementation to see gains.
 
-    Virtual mobility (king danger)         ~5-10 Elo
+    Virtual mobility (king danger)         ~5-10 Elo  [TESTED v23: MSE +0.000003, SKIP]
         Compute the queen's mobility from the king's square (how many squares
         a queen could reach if placed on the king's square). Larger = more
         open = more dangerous. Subtract as a king safety penalty, MG only.
         Complements the existing attack-count penalty.
 
-    Safe/unsafe check bonuses in eval      ~5-10 Elo
+    Safe/unsafe check bonuses in eval      ~5-10 Elo  [TESTED v23: MSE flat +0.00008, SKIP]
         Bonus for opponent having safe checks available against our king
         (checks that can't be recaptured). Separate bonuses for sliding piece
         checks vs knight checks. Used as part of king danger scoring.
 
-    Endgame scaling for drawn endings      ~5-10 Elo
-        Recognize drawish endings and scale down eval:
-        opposite-colored bishops: multiply score by ~0.5
-        single rook + no pawns: reduce toward 0
-        low total pawn count: scale material advantage down
-        Prevents engine from grinding hopelessly drawn endings.
+    Endgame scaling for drawn endings      ✅ DONE v23 (~MSE -0.00017, ~+3 Elo)
+        opp-color bishops: 93/128 = 72.7%; lone rooks: 109/128 = 85.2%
+        Texel-tuned; pawn multiplier tuned to 0 (no pawn adjustment).
 
-    Mate Distance Pruning                  ~5-10 Elo
+    Mate Distance Pruning                  ✅ DONE v23 (~+11 Elo vs v22)
         Tighten alpha/beta bounds based on the shortest possible mate. If we
         can't improve on a mate-in-N already found, prune immediately.
         alpha = max(alpha, -MATE + ply); beta = min(beta, MATE - ply).
@@ -215,7 +218,7 @@ Feature Candidates:
 
     --- Evaluation ---
 
-    Free Passed Pawn bonus                 ~3-6 Elo
+    Free Passed Pawn bonus                 ~3-6 Elo  [TESTED v23: MSE worse at all coefficients, SKIP]
         Beyond the basic passed pawn bonus: detect "free" passed pawns —
         passed pawns with no enemy pieces (not just pawns) in front of them
         on the file. Reward these significantly more since they can promote
@@ -247,12 +250,10 @@ Feature Candidates:
 
     --- Infrastructure ---
 
-    Evaluation TT cache (ETT)              ~2-5 Elo (speed → effective depth)
-        A separate small hash table (e.g., 512K entries) that caches the
-        result of evaluate() keyed on the Zobrist hash. On cache hit,
-        skip the full evaluate() call (saves ~40% of leaf eval cost).
-        Different from the main TT: no depth/flag — just hash → score.
-        Worth considering after any further eval complexity increases.
+    Evaluation TT cache (ETT)              ✅ DONE v23 (~+43 Elo combined w/ MDP)
+        128K-entry cache keyed on hash_key, stores white's perspective score.
+        Retrieve: (side==white) ? ee->score : -ee->score. Cleared on ucinewgame.
+        Excluded from TUNER mode (#ifndef TUNER guards).
 
     UCI multipv                            0 Elo (analysis only)
         Return N best moves with separate score lines. Useful for analysis
@@ -477,6 +478,35 @@ Bot Version History:
                        pos3 d6=11030083, CMK d3=62379.
                        Source: c_rewrite/v19_engine.c
                        Binary: c_rewrite/v19_engine (compiled with gcc -O3 -march=native -pthread)
+
+    v23 - v22 + Mate Distance Pruning + ETT cache + Endgame Scaling (Texel-tuned).
+                       Search: Mate Distance Pruning (tighten alpha/beta by ply-to-mate,
+                       prunes immediately when existing mate is better; zero overhead).
+                       Infrastructure: ETT cache (128K entries, keyed on Zobrist hash,
+                       white's-perspective score; excluded from TUNER mode).
+                       Eval: Endgame scaling (opp-color bishops: 93/128=72.7%; lone
+                       rooks: 109/128=85.2%; pawn multiplier tuned to 0). 3 new tp[]
+                       parameters (tp[744–746]) Texel-tuned on 296K-position dataset
+                       in ~5 seconds (4 epochs). MSE 0.17778→0.17748 total.
+                       Skipped: Free Passer (MSE worse), Correction History (46% game
+                       test), Safe Check Bonuses (MSE flat), Virtual Mobility (MSE +δ).
+                       Tournament: 329.5/636 = 51.8% vs v22 (~+13 Elo, depth 10).
+                       Perft: startpos d5=4865609.
+                       Source: c_rewrite/v23_engine.c  TP_COUNT=747
+                       Binary: c_rewrite/v23_engine (compiled with gcc -O3 -march=native -pthread)
+                       Deployed: Hetzner CPX11 server, config.yml name: v23_engine.
+
+    v22 - v21 + clock-differential time management. allocate_time() takes
+                       their_time_ms as 4th argument; scales own budget by 1.08x/1.15x/
+                       1.25x when ahead by 1.2x/1.5x/2x+ opponent's clock respectively.
+                       This was a clean rebuild after a failed 7-feature v22 bundle
+                       (-35 Elo from 4 bugs: CORR_MAX 32768→1024, swapped BBC pawn
+                       attack masks, wrong occupancy in safe_sq, free passer in pawn
+                       hash cache). Features deferred and tested one-by-one in v23.
+                       Tournament: v22 vs v21 result not recorded (ran during context).
+                       Perft: startpos d5=4865609.
+                       Source: c_rewrite/v22_engine.c
+                       Binary: c_rewrite/v22_engine
 
     v21 - pondering + Lazy SMP deadlock fix + ponder early-finish bug fix.
                        Pondering: search on opponent's time using PV[1] (ponder move).
