@@ -95,19 +95,54 @@ Running the Bot:
 
  GitHub - https://github.com/tcberkley/ChessBot
 
- Reference Engines (for feature ideas):
-    Simbelmyne (Rust, HCE, ~3200 Elo) - https://github.com/sroelants/simbelmyne
-        Good source for: mobility eval, correction history, time management scaling,
-        virtual mobility, endgame scaling, singular extension variants, SPSA tuning
 
-
-v20 Feature Candidates:
+Feature Candidates:
     Ranked by estimated Elo gain. Ranges are rough — small samples have wide CIs.
-    v19 already has (on top of v18): razoring, history-adjusted LMR, LMP,
+    Already done: Texel tuning (v20), pondering (v21), continuous time scaling +
+    clock differential scaling (v22), razoring, history-adjusted LMR, LMP,
     king tropism, passed pawn king proximity, candidate passed pawns, mop-up eval,
     threat detection (pawn attacks on undefended enemy pieces).
 
-    --- Search (highest bang-for-buck) ---
+    --- Search ---
+
+    Mobility eval                          ~20-40 Elo
+        Count legal moves for knights, bishops, rooks, queens (excluding
+        squares attacked by enemy pawns and own pieces). Add a bonus per
+        mobility point, scaled by piece type. Simbelmyne uses ranges of
+        0-99cp (N/B/R) and 0-300cp (Q). This is the single biggest missing
+        eval term vs stronger engines.
+
+    Correction history                     ~20-30 Elo
+        Five hash tables that adjust static eval based on position features:
+        pawn structure (pawn hash), non-pawn material by color, minor pieces,
+        overall material, and continuation moves. Each table is a running
+        average, weighted more for deeper searches. Applied before any
+        pruning decisions. +46 Elo for pawn correction alone in Simbelmyne.
+
+    Virtual mobility (king danger)         ~5-10 Elo
+        Compute the queen's mobility from the king's square (how many squares
+        a queen could reach if placed on the king's square). Larger = more
+        open = more dangerous. Subtract as a king safety penalty, MG only.
+        Complements the existing attack-count penalty.
+
+    Safe/unsafe check bonuses in eval      ~5-10 Elo
+        Bonus for opponent having safe checks available against our king
+        (checks that can't be recaptured). Separate bonuses for sliding piece
+        checks vs knight checks. Used as part of king danger scoring.
+
+    Endgame scaling for drawn endings      ~5-10 Elo
+        Recognize drawish endings and scale down eval:
+        opposite-colored bishops: multiply score by ~0.5
+        single rook + no pawns: reduce toward 0
+        low total pawn count: scale material advantage down
+        Prevents engine from grinding hopelessly drawn endings.
+
+    Mate Distance Pruning                  ~5-10 Elo
+        Tighten alpha/beta bounds based on the shortest possible mate. If we
+        can't improve on a mate-in-N already found, prune immediately.
+        alpha = max(alpha, -MATE + ply); beta = min(beta, MATE - ply).
+        If alpha >= beta, return alpha. Zero overhead — just two comparisons
+        before the search loop.
 
     Quiescence checks (depth -1)           ~3-7 Elo
         In quiescence, at the first ply (ply immediately after dropping from
@@ -130,13 +165,11 @@ v20 Feature Candidates:
         Avoids wasting time at All-nodes. Gate: not already in null-move search,
         score bounds not mating. Can false-prune; tune M/C/R conservatively.
 
-    Improving heuristic for LMP            ~2-4 Elo
-        "improving" = static_eval > eval two plies ago. If improving, be less
-        aggressive with LMP (higher threshold). Requires storing static_eval
-        per ply: static_evals[ply]. Gate existing LMP threshold on improving flag.
-        Change: lmp_base = improving ? lmp_threshold[depth]*2 : lmp_threshold[depth].
-
-    --- Evaluation ---
+    Recapture Extension                    ~3-6 Elo
+        Extend by 1 ply when the current move is a recapture on the same square
+        as the previous move (opponent's last capture is being answered by
+        recapture). Identifies forcing tactical lines. Gate: non-PV or PV both
+        work; typically limited to depth >= 3 to avoid deep explosions.
 
     Stronger threat detection              ~3-5 Elo
         v19 has pawn->piece threats (8cp/undefended). Extend to:
@@ -145,11 +178,28 @@ v20 Feature Candidates:
         (b) penalty for own pieces under threat from enemy pawns (-5cp each).
         Use existing attack tables; add per-piece type loop.
 
+    Pawn push threats                      ~3-5 Elo
+        Bonus for pawns that can safely push to attack undefended enemy
+        pieces (not just attacks from current square as in v19's threat
+        detection). Encourages aggressive pawn advances.
+
     Space advantage                        ~2-5 Elo
         Count squares behind the opponent's pawn chain that are controlled by
         own pieces (rank 3-5 for white, 4-6 for black). Bonus = count * 2cp,
         scaled by how closed the position is (open positions value space less).
         Closed: few pawn exchanges, many doubled/locked pawns.
+
+    Improving heuristic for LMP            ~2-4 Elo
+        "improving" = static_eval > eval two plies ago. If improving, be less
+        aggressive with LMP (higher threshold). Requires storing static_eval
+        per ply: static_evals[ply]. Gate existing LMP threshold on improving flag.
+        Change: lmp_base = improving ? lmp_threshold[depth]*2 : lmp_threshold[depth].
+
+    Passed Pawn Extension                  ~2-4 Elo
+        Extend by 1 ply when a passed pawn advances to rank 6 (White) / rank 3
+        (Black). These advances are often critical and under-searched. Gate:
+        only in non-check positions to avoid compounding with check extension.
+        Can be 0.5-ply (via fractional extensions) or full 1-ply.
 
     Pawn push evaluation                   ~2-4 Elo
         Bonus for pawns that can safely advance (no enemy pawn attack on
@@ -157,71 +207,52 @@ v20 Feature Candidates:
         for each pawn, check if stop_sq is safe (not attacked by enemy pawns)
         and add a small bonus (3-5cp). Scale by advancement.
 
-    --- Evaluation (from Simbelmyne comparison) ---
+    Root move ordering by nodes searched   ~2-4 Elo (time management)
+        After each iteration of iterative deepening, sort root moves by the
+        number of nodes they generated (descending). Moves that consumed more
+        nodes tend to be more critical. Improves move ordering on the next
+        iteration and gives a signal for "bestmove stability" time management.
 
-    Mobility eval                          ~20-40 Elo
-        Count legal moves for knights, bishops, rooks, queens (excluding
-        squares attacked by enemy pawns and own pieces). Add a bonus per
-        mobility point, scaled by piece type. Simbelmyne uses ranges of
-        0-99cp (N/B/R) and 0-300cp (Q). This is the single biggest missing
-        eval term vs stronger engines.
+    --- Evaluation ---
 
-    Correction history                     ~20-30 Elo
-        Five hash tables that adjust static eval based on position features:
-        pawn structure (pawn hash), non-pawn material by color, minor pieces,
-        overall material, and continuation moves. Each table is a running
-        average, weighted more for deeper searches. Applied before any
-        pruning decisions. +46 Elo for pawn correction alone in Simbelmyne.
+    Free Passed Pawn bonus                 ~3-6 Elo
+        Beyond the basic passed pawn bonus: detect "free" passed pawns —
+        passed pawns with no enemy pieces (not just pawns) in front of them
+        on the file. Reward these significantly more since they can promote
+        without tactical obstacles. Applies a large MG+EG bonus for free
+        passers separate from the base passed pawn score.
 
-    Better time management                 ~15-25 Elo
-        Add three soft-limit scaling factors:
-        (1) Best-move stability: if best move keeps changing, use more time;
-        if stable 4+ depths, reduce time.
-        (2) Score stability: if score swings a lot, use more time.
-        (3) Node distribution: if best move used huge % of nodes, search is
-        confident — reduce time.
+    Pawn chain / connected pawns bonus     ~2-4 Elo
+        Bonus for pawns that are directly connected (on adjacent files,
+        one rank apart — i.e., one pawn defends the other). Encourages
+        solid pawn chains vs isolated pawn weaknesses. ~10-15cp per connected
+        pair. Our isolated/doubled penalties already penalize disconnected pawns;
+        this adds positive incentive.
 
-    Virtual mobility (king danger)         ~5-10 Elo
-        Compute the queen's mobility from the king's square (how many squares
-        a queen could reach if placed on the king's square). Larger = more
-        open = more dangerous. Subtract as a king safety penalty, MG only.
-        Complements the existing attack-count penalty.
+    Center control bonus for pawns         ~2-4 Elo
+        Bonus for pawns on central squares (d4/d5/e4/e5) and near-center
+        (c4/c5/f4/f5) — beyond what PSTs already give. Explicit center
+        occupation bonus scaled by the number of center squares controlled.
 
-    Safe/unsafe check bonuses in eval      ~5-10 Elo
-        Bonus for opponent having safe checks available against our king
-        (checks that can't be recaptured). Separate bonuses for sliding piece
-        checks vs knight checks. Used as part of king danger scoring.
+    Castling rights evaluation penalty     ~2-4 Elo
+        Eval penalty (MG only) for having lost castling rights without
+        having castled. If king has not castled and castling rights for
+        both sides are gone, apply a penalty (e.g., -30cp MG). Encourages
+        the engine to castle early and punishes opponents who can't.
+        Simple to implement: check (castling_rights == 0 && !has_castled).
 
-    Endgame scaling for drawn endings      ~5-10 Elo
-        Recognize drawish endings and scale down eval:
-        opposite-colored bishops: multiply score by ~0.5
-        single rook + no pawns: reduce toward 0
-        low total pawn count: scale material advantage down
-        Prevents engine from grinding hopelessly drawn endings.
-
-    Pawn push threats                      ~3-5 Elo
-        Bonus for pawns that can safely push to attack undefended enemy
-        pieces (not just attacks from current square as in v19's threat
-        detection). Encourages aggressive pawn advances.
+    Connected knights bonus                ~1-3 Elo
+        Bonus when two knights are on adjacent squares (can defend each
+        other). ~10cp MG bonus for connected knight pairs.
 
     --- Infrastructure ---
 
-    Texel tuning (eval weight optimization) ~20-50 Elo
-        Generate a large dataset (100k+ positions from self-play + GM games),
-        evaluate each with quiescence, label with game outcome (1/0/0.5).
-        Minimize MSE of sigmoid(eval/400) vs outcome via gradient descent on
-        all PST values, piece values, and eval weights. Very high effort (~week)
-        but the single largest structural improvement available. Stockfish,
-        Ethereal, and all top engines use this -- hand-tuned values always lose.
-        STATUS: v20 implementing coordinate descent tuner (running overnight).
-
-    Pondering                              ~15-30 Elo
-        Search on the opponent's time using the expected reply (PV[1]).
-        If opponent plays ponder move: "ponderhit" -- reuse search, effectively
-        doubles thinking time. If they don't: discard, start fresh.
-        config.yml has ponder: false already. Needs: ponder state tracking,
-        modified search_position() to accept a ponder flag and stop on ponderhit.
-        Main risk: burns CPU between moves; CPX11 has 2 vCPUs so OK with 1 thread.
+    Evaluation TT cache (ETT)              ~2-5 Elo (speed → effective depth)
+        A separate small hash table (e.g., 512K entries) that caches the
+        result of evaluate() keyed on the Zobrist hash. On cache hit,
+        skip the full evaluate() call (saves ~40% of leaf eval cost).
+        Different from the main TT: no depth/flag — just hash → score.
+        Worth considering after any further eval complexity increases.
 
     UCI multipv                            0 Elo (analysis only)
         Return N best moves with separate score lines. Useful for analysis
@@ -446,6 +477,25 @@ Bot Version History:
                        pos3 d6=11030083, CMK d3=62379.
                        Source: c_rewrite/v19_engine.c
                        Binary: c_rewrite/v19_engine (compiled with gcc -O3 -march=native -pthread)
+
+    v21 - pondering + Lazy SMP deadlock fix + ponder early-finish bug fix.
+                       Pondering: search on opponent's time using PV[1] (ponder move).
+                       If opponent plays ponder move → "ponderhit" (reuse search, effectively
+                       doubles thinking time). If not → discard, start fresh. Ponder thread runs
+                       at depth 30 with no time limit; main thread joins on stop/ponderhit.
+                       Bug fixed: ponder search completing all 30 depths naturally (forced mate
+                       in simple endgame) output bestmove before stop/ponderhit arrived.
+                       python-chess then sent "position fen..." directly (no prior stop); old
+                       single-line fgets() consumed and discarded the position command, causing
+                       search from stale ponder board → illegal move in actual game. Fix: while
+                       loop reading commands; handle "position" inline (stop thread → apply
+                       position → read+exec go). Regression test: Suite 5 in test_ponder.py.
+                       Lazy SMP deadlock fix: wtime=0 edge case caused worker threads to spin
+                       indefinitely; fixed with time guard in SMP launch.
+                       Source: c_rewrite/v21_engine.c
+                       Binary: c_rewrite/v21_engine (compiled with gcc -O3 -march=native -pthread)
+                       Deployed: Hetzner CPX11 server (178.156.243.29, Ubuntu 24.04, x86 AMD)
+                       as a systemd service with Threads=2, ponder: true in config.yml.
 
     v20 - Texel tuning of v19's evaluation weights (coordinate descent, Round 2).
                        Source: same search/structure as v19; only the tp[] parameter

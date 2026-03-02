@@ -64,7 +64,6 @@ def fetch_games(token: str, since_ms: int) -> list[dict]:
     """Return list of game dicts from the past 24 hours."""
     params = urllib.parse.urlencode({
         "since": since_ms,
-        "rated": "true",
         "pgnInJson": "false",
         "clocks": "false",
         "opening": "true",
@@ -511,15 +510,13 @@ def main() -> int:
     print(f"Challenge log: {len(challenge_data['outgoing'])} outgoing, "
           f"{len(challenge_data['incoming'])} incoming", flush=True)
 
+    stats = parse_games(games)
+    record_str = f"{stats['wins']}-{stats['losses']}-{stats['draws']}"
     if not games:
         subject = f"tombot1234 Daily Summary — {date_str} | No games"
-        html = build_no_games_html(date_str)
-        record_str = "0-0-0"
     else:
-        stats = parse_games(games)
-        record_str = f"{stats['wins']}-{stats['losses']}-{stats['draws']}"
         subject = f"tombot1234 Daily Summary — {date_str} | {record_str}"
-        html = build_html(stats, date_str, challenge_data=challenge_data)
+    html = build_html(stats, date_str, challenge_data=challenge_data)
 
     try:
         send_email(sender, app_password, recipient, subject, html)
