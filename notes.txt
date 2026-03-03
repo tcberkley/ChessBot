@@ -174,23 +174,23 @@ Feature Candidates:
         recapture). Identifies forcing tactical lines. Gate: non-PV or PV both
         work; typically limited to depth >= 3 to avoid deep explosions.
 
-    Stronger threat detection              ~3-5 Elo
+    Stronger threat detection              ~3-5 Elo  [PARTIAL DONE v24: minor→heavy KEPT (MSE Δ−0.000003); pawn-push SKIP (worse)]
         v19 has pawn->piece threats (8cp/undefended). Extend to:
-        (a) minor piece attacks on undefended enemy pieces (10cp for attacking
-        rook/queen with knight or bishop when undefended by any enemy piece);
-        (b) penalty for own pieces under threat from enemy pawns (-5cp each).
-        Use existing attack tables; add per-piece type loop.
+        (a) minor piece attacks on undefended enemy heavy pieces: KEPT in v24 (tp[780]=15,
+        MSE 0.17697393→0.17697073, Δ−0.000003). Knights/bishops attacking enemy rooks/queens
+        not defended by enemy pawns.
+        (b) pawn push threats (bonus for pawn that can safely advance to attack enemy piece):
+        TESTED, MSE 0.17699 (worse), SKIP.
 
-    Pawn push threats                      ~3-5 Elo
+    Pawn push threats                      ~3-5 Elo  [TESTED v24: MSE 0.17699 (worse), SKIP]
         Bonus for pawns that can safely push to attack undefended enemy
         pieces (not just attacks from current square as in v19's threat
         detection). Encourages aggressive pawn advances.
 
-    Space advantage                        ~2-5 Elo
-        Count squares behind the opponent's pawn chain that are controlled by
-        own pieces (rank 3-5 for white, 4-6 for black). Bonus = count * 2cp,
-        scaled by how closed the position is (open positions value space less).
-        Closed: few pawn exchanges, many doubled/locked pawns.
+    Space advantage                        ~2-5 Elo  [TESTED v24: MSE 0.17699 (worse), SKIP]
+        Count squares in extended center (c3-f5 white, c4-f6 black) not attacked
+        by enemy pawns and with own pawn on same file. Bonus = count * TP_SPACE,
+        MG-scaled. MSE worse — likely duplicates PST center bonuses.
 
     Improving heuristic for LMP            ~2-4 Elo
         "improving" = static_eval > eval two plies ago. If improving, be less
@@ -253,10 +253,10 @@ Feature Candidates:
         pair. Our isolated/doubled penalties already penalize disconnected pawns;
         this adds positive incentive.
 
-    Center control bonus for pawns         ~2-4 Elo
-        Bonus for pawns on central squares (d4/d5/e4/e5) and near-center
-        (c4/c5/f4/f5) — beyond what PSTs already give. Explicit center
-        occupation bonus scaled by the number of center squares controlled.
+    Center control bonus for pawns         ~2-4 Elo  [TESTED v24: MSE 0.17701 (worse), SKIP]
+        Bonus for pawns on central squares (d4/e4 white, d5/e5 black) — beyond
+        what PSTs already give. Explicit center occupation bonus. MSE worse —
+        PSTs already capture center pawn value well enough.
 
     Castling rights evaluation penalty     ~2-4 Elo
         Eval penalty (MG only) for having lost castling rights without
@@ -544,16 +544,18 @@ Bot Version History:
                        Source: c_rewrite/v19_engine.c
                        Binary: c_rewrite/v19_engine (compiled with gcc -O3 -march=native -pthread)
 
-    v24 - v23 + 3 MSE-tested eval improvements. King area threats as tunable
+    v24 - v23 + 4 MSE-tested eval improvements. King area threats as tunable
                        8-entry array (replaces quadratic penalty=danger^2/4, init {0,0,1,4,10,20,36,56},
                        MSE Δ−0.00002); Passed pawn rank-indexed MG+EG arrays replacing flat scalars
                        (tp[756-771], init MG {0,5,10,15,25,40,60,80} EG {-33,5,20,50,60,55,45,30},
                        MSE Δ−0.00033); Inner/outer mobility weighting replacing isqrt_x20 formula
-                       (INNER_SQUARES=c3-f6, 8 per-piece multipliers tp[772-779], MSE Δ−0.00003).
+                       (INNER_SQUARES=c3-f6, 8 per-piece multipliers tp[772-779], MSE Δ−0.00003);
+                       Minor piece attacks on undefended enemy heavy pieces (tp[780]=15, MSE Δ−0.000003).
                        Total MSE improvement vs v23 baseline: 0.17735→0.17697 (Δ−0.00038).
-                       TP_COUNT=780. Perft: startpos d5=4865609.
-                       Tested+skipped in vTest: Split backward pawn (MSE worse), Chained pawn
-                       rank-indexed (MSE worse), IIR/LMR-PV/LMP-filter (pure search, needs game test).
+                       TP_COUNT=781. Perft: startpos d5=4865609.
+                       Tested+skipped in vTest: Split backward pawn, Chained pawn rank-indexed,
+                       Pawn push threats, Space advantage, Center pawn bonus (all MSE worse);
+                       IIR/LMR-PV/LMP-filter (pure search, needs game test).
                        Source: c_rewrite/v24_engine.c
                        Binary: c_rewrite/v24_engine (compiled with gcc -O3 -march=native -pthread)
                        Deployed: Hetzner CPX11 server.

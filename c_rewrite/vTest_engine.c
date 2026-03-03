@@ -2782,7 +2782,7 @@ const int v14_piece_values[12] = {
 // The UCI engine reads from tp[] normally. The tuner binary (compiled with -DTUNER)
 // modifies tp[] in place during coordinate descent and writes optimized values on exit.
 
-#define TP_COUNT 780
+#define TP_COUNT 781
 
 // PST accessor macros (indices into tp[])
 #define TP_PST_PAWN_MG(i)   tp[0   + (i)]
@@ -2842,6 +2842,7 @@ const int v14_piece_values[12] = {
 #define TP_EG_ROOK_BASE   tp[745]   // Endgame scaling: lone rook base scale (out of 128)
 #define TP_EG_ROOK_PAWN   tp[746]   // Endgame scaling: lone rook per-pawn addition
 #define TP_EG_KING_PAWN   tp[747]   // endgame king proximity to enemy pawns
+#define TP_MINOR_THREAT      tp[780]   // minor piece attacks undefended enemy heavy pieces
 
 int tp[TP_COUNT] = {
     // [0..63] pst_pawn_mg — v20 Texel-tuned (epoch 28, MSE=0.19530318)
@@ -3024,6 +3025,7 @@ int tp[TP_COUNT] = {
       5,   // [777] R_MOB_OUTER
       5,   // [778] Q_MOB_INNER
       3,   // [779] Q_MOB_OUTER
+     15,   // [780] TP_MINOR_THREAT: minor attacks undefended enemy rook/queen
 };
 
 // Inner squares mask: c3-f6 (central 16 squares, weighted more in mobility)
@@ -3595,6 +3597,30 @@ static inline int evaluate_side(int color, int phase, int pawn_score_in, U64 own
             }
             U64 undefended = attacked & ~ep_atk;
             score += count_bits(undefended) * TP_THREAT_ATK;
+        }
+    }
+
+    // Tweak A: Minor piece threats — knights/bishops attacking undefended enemy heavy pieces
+    {
+        int enemy_rook_piece  = (color == white) ? r : R;
+        int enemy_queen_piece = (color == white) ? q : Q;
+        U64 heavy_targets = (bitboards[enemy_rook_piece] | bitboards[enemy_queen_piece])
+                            & ~enemy_pawn_atk;
+        if (heavy_targets) {
+            U64 knights = bitboards[knight_piece];
+            while (knights) {
+                int ksq = get_ls1b_index(knights);
+                if (knight_attacks[ksq] & heavy_targets)
+                    score += TP_MINOR_THREAT;
+                pop_bit(knights, ksq);
+            }
+            U64 bishops = bitboards[bishop_piece];
+            while (bishops) {
+                int bsq = get_ls1b_index(bishops);
+                if (get_bishop_attacks(bsq, occ_all) & heavy_targets)
+                    score += TP_MINOR_THREAT;
+                pop_bit(bishops, bsq);
+            }
         }
     }
 
@@ -5483,6 +5509,9 @@ static void clamp_params() {
         if (tp[i] < 0)  tp[i] = 0;
         if (tp[i] > 20) tp[i] = 20;
     }
+    // MINOR_THREAT [780]: non-negative, capped at 40
+    if (tp[780] < 0)  tp[780] = 0;
+    if (tp[780] > 40) tp[780] = 40;
 }
 
 static void calibrate_K() {
