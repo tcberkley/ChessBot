@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-Texel tuner orchestrator for v20_engine.
+Texel tuner orchestrator for v24_engine.
 
 - Stops lichess-bot service
-- Launches v20_tuner as a subprocess
+- Launches v24_tuner as a subprocess
 - Parses TUNER_EPOCH lines from stdout
-- Sends an HTML progress email every 20 epochs (via Gmail SMTP)
+- Sends an HTML progress email every hour with MSE curve PNG attached
 - Sends a final email on convergence or timeout
 - Does NOT restart lichess-bot when done
 
@@ -17,7 +17,7 @@ Usage:
   python3 run_tuner.py [options]
 
   --dataset FILE   Dataset path (default: dataset_pgn.txt)
-  --engine PATH    v20_tuner binary (default: ./v20_tuner)
+  --engine PATH    v24_tuner binary (default: ./v24_tuner)
   --test-email     Send a test email and exit
 """
 
@@ -29,6 +29,7 @@ import smtplib
 import subprocess
 import sys
 import time
+from email.mime.image import MIMEImage
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
@@ -118,7 +119,38 @@ SIGN_CONSTRAINED = {
 
 # ─── Email helpers ────────────────────────────────────────────────────────────
 
-def send_email(subject, html_body):
+def generate_mse_plot(mse_history, path="/tmp/mse_curve.png"):
+    """Generate MSE-over-epochs PNG. Returns path on success, None on failure."""
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        epochs = [ep for ep, mse, el_s in mse_history]
+        mses   = [mse for ep, mse, el_s in mse_history]
+        best_mse = min(mses)
+        best_ep  = epochs[mses.index(best_mse)]
+        fig, ax = plt.subplots(figsize=(10, 5))
+        ax.plot(epochs, mses, "b-o", markersize=3, linewidth=1)
+        ax.axhline(best_mse, color="green", linestyle="--", linewidth=0.8,
+                   label=f"Best: {best_mse:.8f} (ep {best_ep})")
+        ax.set_xlabel("Epoch")
+        ax.set_ylabel("MSE")
+        ax.set_title("v24 Texel Tuner — MSE over Epochs")
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+        fig.tight_layout()
+        fig.savefig(path, dpi=100)
+        plt.close(fig)
+        return path
+    except ImportError:
+        print("matplotlib not available — skipping plot", flush=True)
+        return None
+    except Exception as e:
+        print(f"Plot failed: {e}", flush=True)
+        return None
+
+
+def send_email(subject, html_body, plot_path=None):
     sender   = os.environ.get("SUMMARY_EMAIL_SENDER", "")
     password = os.environ.get("SUMMARY_EMAIL_APP_PASSWORD", "")
     if not sender or not password:
@@ -126,18 +158,24 @@ def send_email(subject, html_body):
               "Skipping email.", flush=True)
         return
 
-    msg = MIMEMultipart("alternative")
-    msg["Subject"] = subject
-    msg["From"]    = sender
-    msg["To"]      = RECIPIENT
-    msg.attach(MIMEText(html_body, "html"))
+    outer = MIMEMultipart("mixed")
+    outer["Subject"] = subject
+    outer["From"]    = sender
+    outer["To"]      = RECIPIENT
+    outer.attach(MIMEText(html_body, "html"))
+
+    if plot_path and os.path.isfile(plot_path):
+        with open(plot_path, "rb") as f:
+            img = MIMEImage(f.read(), name="mse_curve.png")
+        img.add_header("Content-Disposition", "attachment", filename="mse_curve.png")
+        outer.attach(img)
 
     try:
         with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=30) as server:
             server.ehlo()
             server.starttls()
             server.login(sender, password)
-            server.sendmail(sender, RECIPIENT, msg.as_string())
+            server.sendmail(sender, RECIPIENT, outer.as_string())
         print(f"Email sent: {subject}", flush=True)
     except Exception as e:
         print(f"Email failed: {e}", flush=True)
@@ -158,7 +196,7 @@ def build_email_html(epoch, k_value, mse_history, current_scalars,
     lines = []
     lines.append("""
 <html><body style="font-family:monospace;font-size:13px;">
-<h2 style="margin-bottom:4px">v20 Texel Tuner Progress</h2>
+<h2 style="margin-bottom:4px">v24 Texel Tuner Progress</h2>
 """)
 
     # Progress header
@@ -251,9 +289,9 @@ def parse_scalars_from_dump(dump_lines):
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
 def main():
-    parser = argparse.ArgumentParser(description="v20 Texel tuner orchestrator")
+    parser = argparse.ArgumentParser(description="v24 Texel tuner orchestrator")
     parser.add_argument("--dataset",    default="dataset_pgn.txt")
-    parser.add_argument("--engine",     default="./v20_tuner")
+    parser.add_argument("--engine",     default="./v24_tuner")
     parser.add_argument("--test-email", action="store_true", dest="test_email")
     args = parser.parse_args()
 
@@ -266,7 +304,7 @@ def main():
             current_scalars=test_scalars,
             elapsed_s=0, secs_per_epoch=0
         )
-        send_email("[v20 Tuner] TEST EMAIL — setup verification", html_body)
+        send_email("[v24 Tuner] TEST EMAIL — setup verification", html_body, plot_path=None)
         return
 
     # Stop lichess-bot
@@ -311,6 +349,8 @@ def main():
     in_dump        = False
     start_time     = time.time()
     last_epoch_time = start_time
+    last_email_time = start_time
+    EMAIL_INTERVAL  = 3600  # send email every hour
     secs_per_epoch = 0.0
 
     # Calibration K line
@@ -319,7 +359,7 @@ def main():
         r"TUNER_EPOCH epoch=(\d+) mse=([\d.]+) elapsed_s=(\d+) improved=(\d+)"
     )
     dump_start_re = re.compile(r"=== Epoch (\d+)\s+MSE=")
-    dump_end_re   = re.compile(r"^  tp\[743\]")   # last scalar line
+    dump_end_re   = re.compile(r"^  tp\[747\]")   # last scalar line printed by v24 print_params()
 
     for raw_line in proc.stdout:
         line = raw_line.rstrip()
@@ -347,9 +387,9 @@ def main():
                 mse_history.append((0, mse, 0))
             mse_history.append((ep, mse, el_s))
 
-            if ep % 20 == 0:
+            if time.time() - last_email_time >= EMAIL_INTERVAL:
                 elapsed = time.time() - start_time
-                subj    = f"[v20 Tuner] Epoch {ep} — MSE: {mse:.8f}"
+                subj    = f"[v24 Tuner] Epoch {ep} — MSE: {mse:.8f}"
                 body    = build_email_html(
                     epoch=ep, k_value=k_value,
                     mse_history=mse_history,
@@ -357,7 +397,9 @@ def main():
                     elapsed_s=elapsed,
                     secs_per_epoch=secs_per_epoch,
                 )
-                send_email(subj, body)
+                plot_path = generate_mse_plot(mse_history)
+                send_email(subj, body, plot_path=plot_path)
+                last_email_time = time.time()
 
         # Capture print_params() dump to parse scalar values
         if dump_start_re.search(line):
@@ -385,7 +427,7 @@ def main():
 
     # Final email
     final_mse = mse_history[-1][1] if mse_history else 0.0
-    subj = f"[v20 Tuner] FINISHED — Final MSE: {final_mse:.8f}"
+    subj = f"[v24 Tuner] FINISHED — Final MSE: {final_mse:.8f}"
     body = build_email_html(
         epoch=mse_history[-1][0] if mse_history else 0,
         k_value=k_value,
@@ -394,7 +436,8 @@ def main():
         elapsed_s=elapsed,
         secs_per_epoch=secs_per_epoch,
     )
-    send_email(subj, body)
+    plot_path = generate_mse_plot(mse_history)
+    send_email(subj, body, plot_path=plot_path)
     print("Done. lichess-bot has NOT been restarted (per config).", flush=True)
 
 

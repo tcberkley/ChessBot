@@ -1,6 +1,6 @@
 Lichess Bot Setup:
     - Account: tombot1234
-    - Engine: v23_engine (UCI protocol, Texel-tuned)
+    - Engine: v24_engine (UCI protocol, Texel-tuned)
     - Config: lichess-bot-master/config.yml (gitignored)
     - Bridge: lichess-bot-master/ (Python, lichess-bot library)
     - Server: Hetzner CPX11, root@178.156.243.29, Ubuntu 24.04
@@ -116,14 +116,17 @@ Feature Candidates:
         0-99cp (N/B/R) and 0-300cp (Q). This is the single biggest missing
         eval term vs stronger engines.
 
-    Correction history                     ~20-30 Elo  [TESTED v23: 46% game test, SKIP]
+    Correction history                     ~20-30 Elo  [KEPT in v24 — 49W/54D/41L = 52.8% vs v24 baseline]
         Five hash tables that adjust static eval based on position features:
         pawn structure (pawn hash), non-pawn material by color, minor pieces,
         overall material, and continuation moves. Each table is a running
         average, weighted more for deeper searches. Applied before any
         pruning decisions. +46 Elo for pawn correction alone in Simbelmyne.
-        Note: tested with simple EMA approach (±8cp cap); regressed vs v22.
-        May need more careful implementation to see gains.
+        v23 attempt: simple EMA, CORR_MAX=32768 → 46% game test (regression; over-pruning).
+        vTest retry (2026-03-02): 1-table Zobrist-indexed, CORR_SIZE=16384, CORR_GRAIN=256,
+        CORR_MAX=1024, depth-weighted update (weight=min(depth+1,16)), raw_eval computed at
+        all non-check nodes, #ifndef TUNER guards. 144 games depth 10: 49W/54D/41L (52.8%,
+        more wins than losses). KEPT, folded into v24.
 
     Virtual mobility (king danger)         ~5-10 Elo  [TESTED v23: MSE +0.000003, SKIP]
         Compute the queen's mobility from the king's square (how many squares
@@ -556,6 +559,18 @@ Bot Version History:
                        Tested+skipped in vTest: Split backward pawn, Chained pawn rank-indexed,
                        Pawn push threats, Space advantage, Center pawn bonus (all MSE worse);
                        IIR/LMR-PV/LMP-filter (pure search, needs game test).
+                       vTest v2 (2026-03-02): Correction History KEPT — 1-table Zobrist-indexed,
+                       CORR_SIZE=16384, CORR_GRAIN=256, CORR_MAX=1024, depth-weighted update,
+                       raw_eval at all non-check nodes, #ifndef TUNER guards. 144 games depth 10:
+                       49W/54D/41L (52.8%, more wins than losses). Folded into v24.
+                       Texel tuning Round 2 (2026-03-02): All 781 tp[] params re-tuned on
+                       1M Lichess DB positions (same dataset as v20). K=754.6. Converged in
+                       8 epochs (3.46h). MSE 0.19514→0.19436 (Δ−0.00078). Key changes vs
+                       pre-tune: MAT_PAWN 91→83, MAT_ROOK 486→483, MAT_QUEEN 920→928,
+                       DOUBLED_PAWN 3→0, BISHOP_PAIR 57→60, KING_SEMI 7→4, KING_OPEN 28→26,
+                       THREAT_ATK 33→35, CAND_DENOM 7→12, KING_CTR 11→6, EG_ROOK_BASE 109→110,
+                       EG_ROOK_PAWN 0→5, EG_KING_PAWN 5→10. PSTs updated throughout.
+                       Perft still correct: d5=4865609.
                        Source: c_rewrite/v24_engine.c
                        Binary: c_rewrite/v24_engine (compiled with gcc -O3 -march=native -pthread)
                        Deployed: Hetzner CPX11 server.

@@ -2845,150 +2845,150 @@ const int v14_piece_values[12] = {
 #define TP_MINOR_THREAT      tp[780]   // minor piece attacks undefended enemy heavy pieces
 
 int tp[TP_COUNT] = {
-    // [0..63] pst_pawn_mg — v20 Texel-tuned (epoch 28, MSE=0.19530318)
+    // [0..63] pst_pawn_mg — v24 Texel-tuned (epoch 8, MSE=0.19436049)
       0,   0,   0,   0,   0,   0,   0,   0,
-     54,  53,  54,  54,  54,  54,  52,  46,
-     14,  13,  24,  39,  39,  24,  14,  14,
-      9,   7,   6,  25,  35,  15,  10,   5,
-     -5,  -5,  -5,  20,  20,   5,   2,  -5,
-      8,  -4,  -5,   5,   3, -12,   0,   2,
-      0,   5,   5, -15, -15,  10,   5,   0,
+     62,  61,  62,  62,  62,  55,  56,  38,
+     22,  21,  32,  47,  47,  32,  22,  22,
+     17,  13,   0,  17,  38,  23,  12,  -3,
+     -8, -13,  -8,  12,  12,  11,   2, -13,
+      8,  -4, -13,  11,   6, -12,  -1,   0,
+     -3,   2,  -3,  -7, -16,   9,  11,  -6,
       0,   0,   0,   0,   0,   0,   0,   0,
     // [64..127] pst_pawn_eg
       0,   0,   0,   0,   0,   0,   0,   0,
-     85,  85,  85,  85,  85,  84,  85,  85,
-     55,  55,  55,  55,  55,  55,  55,  55,
-     35,  25,  27,  26,  35,  35,  26,  31,
-     17,  15,  17,  15,  15,  25,  19,  15,
-     12,   9,  15,  15,  11,  12,  12,   6,
-     -5,   4,  -1,   5,   4,   5,   5,   1,
+     93,  93,  93,  93,  93,  84,  93,  93,
+     63,  63,  63,  63,  63,  63,  63,  63,
+     43,  17,  21,  18,  27,  43,  21,  24,
+     20,   7,  18,   7,   7,  27,  19,   8,
+     12,   9,  17,  22,  14,  12,  10,   4,
+     -3,   6,   0,  13,   3,  13,  13,   0,
       0,   0,   0,   0,   0,   0,   0,   0,
     // [128..191] pst_knight
-    -45, -45, -35, -35, -25, -35, -35, -55,
-    -45, -21,  -5,  10,   0,   5, -15, -35,
-    -25,  10,  15,  20,  20,   8,  10, -25,
-    -25,  -5,  10,  15,  15,  15,   5, -25,
-    -35,   9,  20,  15,  25,  20,  10, -25,
-    -35,  -5, -10,  27,  24,  -2,   5, -24,
-    -60,   0, -20,  -2,   0,  -6,   0, -20,
-    -30, -29, -26, -19, -23, -31, -20, -30,
+    -37, -53, -43, -43, -17, -43, -27, -63,
+    -53, -20, -13,  18,  -8,  13,  -7, -27,
+    -17,  18,  23,  23,  28,   0,  18, -17,
+    -17, -13,   3,   7,   7,   7,   5, -17,
+    -35,   9,  28,  11,  25,  28,  18, -17,
+    -34, -12, -14,  19,  22,  -3,   4, -16,
+    -56,   8, -20,  -4,  -3,  -2,   8, -20,
+    -22, -37, -18, -17, -27, -23, -13, -22,
     // [192..255] pst_bishop_mg
-    -19,  -9,   3,   2,  -9, -30,   0, -20,
-     -9,  16,  13,   0,   1,   9,  25, -30,
-    -10,  10,  30,   9,  10,  30,  30,   5,
-      2, -19,  10,  16,  -8,  10, -11,   0,
-    -30,   6,   0,  15,  14, -15,  10,   6,
-    -30,  14,   0,  -3,   2,  -7,  14,  -5,
-    -10,  11,  12, -17,  14,  13,  20,   0,
-    -40, -10,   7,  -6, -10,  -9, -10, -40,
+    -19,  -9,   3,   2,  -9, -38,   0, -20,
+     -9,  16,  13,   0,   1,   9,  33, -38,
+    -10,  10,  38,   9,  10,  36,  38,  -1,
+      2, -27,  10,  15, -16,  10,  -9,   0,
+    -38,   6,   4,  15,   9, -16,   9,  14,
+    -31,  15,   0,  -3,   4,  -7,  19,  -5,
+     -4,  10,  16, -15,  10,  15,  23,   8,
+    -48, -10,   4,   0,  -9,  -8, -10, -40,
     // [256..319] pst_bishop_eg
-    -20, -10,  -3,  -1, -10, -27,  -1, -20,
-    -10,  13,  12,   0,   0,   8,  20, -30,
-    -10,   0,  30,  10,  10,  24,  20,   3,
-     -2,  17,  10,  26,  22,  10,  13,  -2,
-    -30,  -1,  14,  25,  25,  -1,   6,   4,
-    -19,   7,   4,  23,  18,   3,  14,  -8,
-    -10,   5,  10,   4,  -1,  12,  10,  -1,
-    -40, -10, -30,  -8, -10, -11, -10, -39,
+    -20, -10,  -3,  -1, -10, -35,  -1, -20,
+    -10,  13,  12,   0,   0,   8,  28, -38,
+    -10,   0,  38,  10,  10,  19,  28,   9,
+     -2,  25,  10,  25,  23,  10,  15,  -2,
+    -30,  -1,  17,  25,  20,  -2,   5,  12,
+    -20,   8,   4,  23,  20,   3,  19,  -8,
+    -16,   0,  14,   6,   0,  14,  10,   3,
+    -48, -10, -35,  -1, -10, -10, -10, -39,
     // [320..383] pst_rook_mg
-     20,  17,  20,   5,  12,  20,  20,  20,
-      5,  -9,  10,  20,   9,  30,  30,   5,
-     15,  -1,  20, -15,  20,  20,  20,  15,
-     -5,   1,   8,   7,  -1,  16,  14,  -2,
-     -7,  -1,  -2,   5,  -2,   0,  12,  15,
-    -22,   4, -18, -19,   1,  -2,  20,   9,
-     -5,  -6,   1,   1,   1,   4,  -1,   7,
-      1,  -3,  -5,  -2, -15,   1,  18,  -5,
+     28,  17,  28,   5,  12,  28,  28,  28,
+     -1, -12,   3,  20,   9,  33,  35,   5,
+     23,  -1,  28, -23,  22,  28,  28,  23,
+     -5,   5,   9,   7,  -1,  16,  20,  -1,
+     -7,  -1,  -3,   5,  -2,   1,  18,  23,
+    -22,   5, -23, -27,   1,  -2,  26,   9,
+     -5,  -6,   1,   1,   4,   7,  -1,  15,
+     -7,  -4,  -8,  -2, -15,   1,  21,  -5,
     // [384..447] pst_rook_eg
-     25,  21,  25,  10,  19,  25,  25,  25,
-      5,  -6,  10,  19,  10,  30,  30,   5,
-     20,   2,  25,  -7,  23,  25,  25,  20,
-      1,   5,  13,   2,   6,  23,  22,  -2,
-     -2,   1,   4,  11,   3,   5,  17,  20,
-    -16,  10, -13, -15,   5,   3,  25,   9,
-     -5,  -5,   0,   0,   0,   3,   0,  -4,
-      0,  -3,   2,   1, -10,   1,  15,   1,
+     32,  21,  33,  10,  19,  32,  33,  33,
+      4,  -8,  10,  17,  10,  32,  34,   5,
+     28,   2,  33,  -7,  22,  32,  33,  28,
+      1,   9,  14,   2,   6,  23,  29,  -3,
+     -2,   1,   6,  11,   4,   7,  23,  28,
+    -16,  11, -17, -23,   5,   3,  31,   9,
+     -5,  -5,   0,   0,   3,   6,   0,   3,
+      2,  -4,   4,   1, -10,   1,  18,   1,
     // [448..511] pst_queen_mg
-    -33,  -9, -10,   0,  -4,   0,  10,   0,
-      0, -20,  -3,   0,   9,  20, -16,   0,
-    -30,  25,  -5,  25,   7,  25,  -1,   0,
-    -16,  -1,  22,  -2,   5,  17,  -6,  -4,
-    -22,   1,   4,  11,  18,  15, -12, -17,
-      0, -20,   4,   8,  18,   4,   1, -10,
-    -30,  -2,   1,   4,  -2,   1,   1,  10,
-      0,  10,  -7,  15,   8, -13, -28,   0,
+    -33,  -9, -10,   0,  -4,   1,  18,   1,
+      0, -28, -11,   0,   8,  20, -24,   0,
+    -33,  27, -13,  33,   2,  33,  -1,   0,
+    -16,  -1,  22, -10,  -3,  17,  -6,  -4,
+    -18,   1,  -2,  11,  11,  15, -12, -17,
+      0, -28,  -2,   8,  18,   4,   1, -10,
+    -31,  -2,   1,   7,  -1,   1,   1,  16,
+      8,  18,   1,  23,  16, -13, -28,   0,
     // [512..575] pst_queen_eg
-    -27, -10, -10,  -1,  -5,  -1,   8,  -1,
-     -1, -15,  -3,   0,   9,  20, -16,  -1,
-    -21,  20,   7,  30,  12,  30,   0,  -2,
-    -19,   0,  28,  22,  28,  22,   4,  -2,
-    -10,   0,  19,  22,  29,  26, -11, -10,
-     -3,  -3,  10,  12,  25,  12,   0, -10,
-    -26,   0,   0,  -3,   1,   0,   0,   8,
-     -1,   8,  -6,   9,   0, -12, -27,  -3,
+    -27, -10, -10,  -1,  -5,  -3,  16,  -1,
+     -1, -18, -11,   0,   9,  20, -20,  -1,
+    -20,  22,   3,  37,  13,  38,   0,  -2,
+    -19,   0,  28,  26,  21,  22,   4,  -2,
+     -6,   0,  22,  22,  21,  26, -11, -10,
+     -3,   5,  15,  12,  25,  12,   0, -10,
+    -27,   0,   0,  -4,   4,   0,   0,  14,
+      5,  16,   1,  16,   8, -12, -27,  -3,
     // [576..639] pst_king_mg
-    -31, -40, -21, -48, -60, -21, -20, -33,
-    -46, -20, -21, -30, -33, -23, -20, -10,
-    -17, -22, -23, -30, -30, -23, -21, -10,
-    -28, -22, -20, -33, -33, -20, -23, -22,
-     -2, -11, -50, -21, -38, -14, -27,  -1,
-    -10, -32, -30, -24, -40, -28, -19, -12,
-     25,   0,  -8,   1,  -4,  12,  33,  28,
-     40,  43,  17, -20, -19, -10,  30,  21,
+    -31, -38, -13, -45, -60, -13, -19, -33,
+    -46, -13, -13, -23, -25, -15, -13,  -2,
+    -14, -14, -15, -22, -22, -17, -14,  -2,
+    -25, -14, -16, -33, -25, -12, -15, -20,
+      3, -10, -58, -13, -38, -14, -27,   7,
+    -10, -32, -29, -24, -48, -28, -19, -12,
+     25,  -8,  -8,   2,  -3,  15,  41,  28,
+     48,  48,  22, -28, -26, -16,  29,  21,
     // [640..703] pst_king_eg
-    -50, -30, -10, -28, -37, -10, -10, -53,
-    -49,  10,  20,  20,  20,  20,  10, -10,
-    -18,  20,  30,  35,  35,  30,  20, -10,
-    -30,  20,  35,  40,  40,  35,  20, -21,
-    -10,  20,  -5,  40,  23,  30,   2, -10,
-    -30, -15, -10,  13,  -5,   3,   0, -29,
-    -47, -30, -19,  -2, -11, -20,  -3, -21,
-    -30, -17, -25, -50, -50, -40, -30, -51,
-    // [704..743] scalar bonuses — v20 Texel-tuned (epoch 28)
-     91,  // [704] TP_MAT_PAWN
-    306,  // [705] TP_MAT_KNIGHT
+    -50, -27,  -2, -24, -37,  -2,  -2, -53,
+    -49,  18,  28,  28,  28,  28,  18,  -2,
+    -14,  28,  38,  43,  42,  38,  28,  -2,
+    -27,  28,  38,  42,  47,  43,  28, -19,
+     -4,  20, -13,  48,  23,  30,   2,  -2,
+    -30, -15, -10,  13, -13,   3,   0, -29,
+    -47, -38, -19,  -4, -10, -23,   1, -21,
+    -22, -12, -20, -57, -58, -34, -31, -51,
+    // [704..747] scalar bonuses — v24 Texel-tuned (epoch 8, MSE=0.19436049)
+     83,  // [704] TP_MAT_PAWN
+    308,  // [705] TP_MAT_KNIGHT
     338,  // [706] TP_MAT_BISHOP
-    486,  // [707] TP_MAT_ROOK
-    920,  // [708] TP_MAT_QUEEN
-      3,  // [709] TP_DOUBLED_PAWN
-      4,  // [710] TP_ISOLATED_PAWN
-     22,  // [711] TP_PAWN_ISLAND
-     23,  // [712] TP_BACKWARD_PAWN
-     57,  // [713] TP_BISHOP_PAIR
-     13,  // [714] TP_BAD_BISHOP
-     28,  // [715] TP_OUTPOST
-      1,  // [716] TP_OUTPOST_DEF
-     34,  // [717] TP_OPEN_FILE
-     19,  // [718] TP_SEMI_OPEN
-     27,  // [719] TP_ROOK_7TH_MG
-     49,  // [720] TP_ROOK_7TH_EG
-     42,  // [721] TP_ROOK_BEHIND
-      7,  // [722] TP_CONN_ROOKS
-      2,  // [723] TP_KNIGHT_TROP
+    483,  // [707] TP_MAT_ROOK
+    928,  // [708] TP_MAT_QUEEN
+      0,  // [709] TP_DOUBLED_PAWN
+      2,  // [710] TP_ISOLATED_PAWN
+     24,  // [711] TP_PAWN_ISLAND
+     20,  // [712] TP_BACKWARD_PAWN
+     60,  // [713] TP_BISHOP_PAIR
+     14,  // [714] TP_BAD_BISHOP
+     24,  // [715] TP_OUTPOST
+      0,  // [716] TP_OUTPOST_DEF
+     31,  // [717] TP_OPEN_FILE
+     22,  // [718] TP_SEMI_OPEN
+     25,  // [719] TP_ROOK_7TH_MG
+     45,  // [720] TP_ROOK_7TH_EG
+     38,  // [721] TP_ROOK_BEHIND
+      8,  // [722] TP_CONN_ROOKS
+      4,  // [723] TP_KNIGHT_TROP
       6,  // [724] TP_BISHOP_TROP
       8,  // [725] TP_ROOK_TROP
      21,  // [726] TP_QUEEN_TROP
-     14,  // [727] TP_SHIELD_1
-     10,  // [728] TP_SHIELD_2
-     28,  // [729] TP_KING_OPEN
-      7,  // [730] TP_KING_SEMI
-     15,  // [731] TP_CASTLE_RIGHT
+     13,  // [727] TP_SHIELD_1
+      9,  // [728] TP_SHIELD_2
+     26,  // [729] TP_KING_OPEN
+      4,  // [730] TP_KING_SEMI
+     17,  // [731] TP_CASTLE_RIGHT
      40,  // [732] TP_CASTLED
-     33,  // [733] TP_THREAT_ATK
+     35,  // [733] TP_THREAT_ATK
       0,  // [734] TP_PASSED_MG (replaced by rank-indexed array at tp[756+])
       0,  // [735] TP_PASSED_EG (replaced by rank-indexed array at tp[764+])
-      7,  // [736] TP_CAND_DENOM
-     11,  // [737] TP_KING_CTR
+     12,  // [736] TP_CAND_DENOM
+      6,  // [737] TP_KING_CTR
       5,  // [738] TP_KING_KING
-      7,  // [739] TP_KPASS_OWN
+      9,  // [739] TP_KPASS_OWN
      10,  // [740] TP_KPASS_ENE
       0,  // [741] TP_KING_MOB
      12,  // [742] TP_MOPUP_CRN
       7,  // [743] TP_MOPUP_KDIST
      93,  // [744] TP_EG_OPP_BISH  (opp-color bishop scale, 93/128 = 72.7%, Texel-tuned)
-    109,  // [745] TP_EG_ROOK_BASE (lone rook base scale, 109/128 = 85.2%, Texel-tuned)
-      0,  // [746] TP_EG_ROOK_PAWN (per-pawn addition to rook scale, Texel-tuned)
-      5,  // [747] TP_EG_KING_PAWN (endgame king proximity to enemy pawns)
+    110,  // [745] TP_EG_ROOK_BASE (lone rook base scale, 110/128 = 85.9%, Texel-tuned)
+      5,  // [746] TP_EG_ROOK_PAWN (per-pawn addition to rook scale, Texel-tuned)
+     10,  // [747] TP_EG_KING_PAWN (endgame king proximity to enemy pawns)
       // [748-755] TP_KING_THREATS[0-7]: tunable array for king danger penalty
       0,   // [748] danger index 0 (king_danger 0-1)
       0,   // [749] danger index 1 (king_danger 2-3)
@@ -3970,6 +3970,15 @@ int capture_history[12][64][12];
 // 1-ply continuation history [prev_piece][prev_to][cur_piece][cur_to]
 short cont_hist[12][64][12][64];
 
+// Correction history: adjusts static_eval based on historical score error
+#ifndef TUNER
+#define CORR_SIZE 16384
+#define CORR_MASK (CORR_SIZE - 1)
+#define CORR_GRAIN 256
+#define CORR_MAX 1024
+static int corr_hist[CORR_SIZE];
+#endif
+
 // PV table
 __thread int pv_length[max_ply];
 __thread int pv_table[max_ply][max_ply];
@@ -4304,6 +4313,7 @@ static inline int negamax(int alpha, int beta, int depth, int null_ok)
     }
 
     int in_check = is_in_check();
+    int raw_eval = 0; // for correction history (set below when !in_check)
 
     // Check extension
     if (in_check && ply < max_ply - 5)
@@ -4316,6 +4326,12 @@ static inline int negamax(int alpha, int beta, int depth, int null_ok)
     // Max ply overflow
     if (ply > max_ply - 1)
         return evaluate();
+
+#ifndef TUNER
+    // Compute raw static eval for correction history (all real non-check nodes)
+    if (!in_check)
+        raw_eval = evaluate() + 10;
+#endif
 
     // Null move pruning
     int game_phase = get_game_phase();
@@ -4398,7 +4414,12 @@ static inline int negamax(int alpha, int beta, int depth, int null_ok)
     int futile = 0;
     if (depth <= 3 && !in_check && !pv_node) {
         // Tempo bonus: side to move has a slight initiative advantage (+10 cp)
+#ifndef TUNER
+        int corr = corr_hist[hash_key & CORR_MASK];
+        int static_eval = raw_eval + corr / CORR_GRAIN;
+#else
         int static_eval = evaluate() + 10;
+#endif
 
         // Reverse futility pruning: if eval - margin >= beta, this node is too good
         // for opponent to allow, so prune it
@@ -4686,6 +4707,22 @@ static inline int negamax(int alpha, int beta, int depth, int null_ok)
 
     // Store TT entry
     write_hash_entry(alpha, depth, hash_flag, best_move);
+
+#ifndef TUNER
+    // Correction history update: adjust table based on error between search result and raw eval
+    if (!in_check && raw_eval != 0 && legal_moves_count > 0 &&
+        alpha > -mate_score && alpha < mate_score) {
+        int error = alpha - raw_eval;
+        if (error >  CORR_MAX) error =  CORR_MAX;
+        if (error < -CORR_MAX) error = -CORR_MAX;
+        int weight = depth + 1;
+        if (weight > 16) weight = 16;
+        int *entry = &corr_hist[hash_key & CORR_MASK];
+        *entry = (*entry * (CORR_GRAIN - weight) + error * weight) / CORR_GRAIN;
+        if (*entry >  CORR_MAX) *entry =  CORR_MAX;
+        if (*entry < -CORR_MAX) *entry = -CORR_MAX;
+    }
+#endif
 
     return alpha;
 }
@@ -5313,6 +5350,9 @@ void uci_loop()
         if (strncmp(input, "ucinewgame", 10) == 0) {
             parse_position("position startpos");
             clear_hash_table();
+#ifndef TUNER
+            memset(corr_hist, 0, sizeof(corr_hist));
+#endif
             continue;
         }
 
