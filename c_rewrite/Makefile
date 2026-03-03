@@ -3,7 +3,7 @@ CFLAGS = -O3 -Wall -Wno-unused-variable -Wno-unused-function
 V14FLAGS = -O3 -march=native -fomit-frame-pointer -Wall -Wno-unused-variable -Wno-unused-function
 LDFLAGS = -lm
 
-all: v13_engine v14_engine v15_engine v16_engine v17_engine v18_engine v19_engine v20_engine v20_tuner v21_engine v22_engine v23_engine v24_engine
+all: v13_engine v14_engine v15_engine v16_engine v17_engine v18_engine v19_engine v20_engine v20_tuner v21_engine v22_engine v23_engine
 
 v13_engine: v13_engine.c
 	$(CC) $(CFLAGS) -o v13_engine v13_engine.c $(LDFLAGS)
@@ -47,13 +47,7 @@ v23_engine: v23_engine.c
 v23_tuner: v23_engine.c
 	$(CC) $(V14FLAGS) -DTUNER -o v23_tuner v23_engine.c -lm
 
-v24_engine: v24_engine.c
-	$(CC) $(V14FLAGS) -pthread -o v24_engine v24_engine.c $(LDFLAGS)
-
-v24_tuner: v24_engine.c
-	$(CC) $(V14FLAGS) -DTUNER -o v24_tuner v24_engine.c -lm
-
 clean:
-	rm -f v13_engine v14_engine v15_engine v16_engine v17_engine v18_engine v19_engine v20_engine v20_tuner v21_engine v22_engine v22_tuner v23_engine v23_tuner v24_engine v24_tuner
+	rm -f v13_engine v14_engine v15_engine v16_engine v17_engine v18_engine v19_engine v20_engine v20_tuner v21_engine v22_engine v22_tuner v23_engine v23_tuner
 
 .PHONY: all clean
