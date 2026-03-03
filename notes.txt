@@ -216,6 +216,27 @@ Feature Candidates:
         nodes tend to be more critical. Improves move ordering on the next
         iteration and gives a signal for "bestmove stability" time management.
 
+    Internal Iterative Reduction (IIR)     ~2-4 Elo  [SKIP: pure search change, needs game test]
+        At non-PV nodes with depth >= 4 and no TT move: reduce depth by 1
+        instead of running a shallow IID search. Simpler and cheaper than IID
+        (no extra search). Our IID runs a depth-2 reduced search at PV nodes;
+        IIR just subtracts 1 from depth at non-PV nodes with no TT hit.
+        Complementary: keep IID for PV nodes, add IIR for non-PV. No new params.
+
+    Separate PV/non-PV LMR                ~1-3 Elo  [SKIP: pure search change, needs game test]
+        PV nodes currently get the same LMR reductions as non-PV. PV nodes
+        deserve less aggressive reduction. Split: non-PV step keeps current
+        rate, PV uses a higher step (e.g. half the reduction growth) → ~1 fewer
+        ply on average at PV. Gate on is_pv flag already present in negamax.
+        Two separate reduction formula branches.
+
+    LMP score filter                       ~1-2 Elo  [SKIP: pure search change, needs game test]
+        Current LMP skips all quiet moves after lmp_threshold[depth] quiets
+        regardless of move history score. Better: also require move_score < -65
+        (only prune clearly-bad-history moves). Prevents LMP from discarding
+        late-ordered moves that happen to have strong history scores. Add one
+        condition to the existing LMP check.
+
     --- Evaluation ---
 
     Free Passed Pawn bonus                 ~3-6 Elo  [TESTED v23: MSE worse at all coefficients, SKIP]
@@ -247,6 +268,50 @@ Feature Candidates:
     Connected knights bonus                ~1-3 Elo
         Bonus when two knights are on adjacent squares (can defend each
         other). ~10cp MG bonus for connected knight pairs.
+
+    Passed pawn bonus indexed by rank      ✅ DONE v24 (MSE 0.17733→0.17700, Δ−0.00033)
+        We have flat PASSED_MG/PASSED_EG scalars (Texel-tuned to 30 MG).
+        Replace with 8-entry rank-indexed arrays PASSED_PAWN_MG[8] and
+        PASSED_PAWN_EG[8]. Rank-specific values let the tuner learn the true
+        curve — rank-6/7 passers deserve exponentially more reward than rank-3.
+        Reference shape: [(11,-33), (16,17), (19,55), (30,59), (41,50),
+        (22,41), (25,14), (37,26)] for ranks 0-7 (MG,EG pairs). The pawn eval
+        already has rank = sq >> 3 available. Remove flat PASSED_MG/PASSED_EG
+        from tp[], add 16 new entries. Big Texel tuning target.
+
+    Split backward pawn: open vs closed    ~2-5 Elo  [TESTED v24: MSE 0.17740 (worse), SKIP]
+        We have a single BACKWARD_PAWN penalty. Split into two:
+          BACKWARD_PAWN_OPEN: harsher (~20-25cp MG) — exposed to rook attacks
+          BACKWARD_PAWN_CLOSED: milder (~10-15cp MG) — blocked by enemy pawn
+        Open file = no pawn (either color) ahead on that file; use existing
+        file_masks. Two new tp[] params in pawn_eval_side(), Texel-tunable.
+
+    Chained pawn bonus indexed by rank     ~2-4 Elo  [TESTED v24: MSE 0.17714 (worse), SKIP]
+        Flat connected-pawn bonus tested and reverted in v23 (flat=wrong).
+        Better: rank-indexed array CHAINED_PAWN[8] where advancing connected
+        pawns get exponentially more reward. E.g. init [0,1,10,19,26,32,40,0]
+        cp (rank 0/7=0, rank 5/6≈40cp). Detection: pawn_attacks[color][sq] &
+        own_pawns_bb (same as our failed flat test). The rank-indexed version
+        is meaningful in endgames where advanced chain passers are decisive.
+        8 MG + 8 EG new tp[] params.
+
+    Inner/outer mobility weighting         ✅ DONE v24 (MSE 0.17700→0.17697, Δ−0.00003)
+        Current mobility counts all safe squares equally. Better: weight
+        "inner" (central) squares more than "outer" (rim) squares. Inner =
+        c3–f6 area (16 central squares), precomputed as INNER_SQUARES mask.
+        For each piece type: inner_mob and outer_mob counted separately with
+        different per-piece multipliers (inner ~3-11cp, outer ~2-3cp).
+        Replaces current isqrt_x20 mobility formula. 8 new tp[]
+        params (N/B/R/Q × inner/outer), all Texel-tunable.
+
+    King area threats as tunable array     ✅ DONE v24 (MSE 0.17735→0.17733, Δ−0.00002)
+        We use penalty = min(danger*danger/4, 150) (quadratic formula). Replace
+        with an 8-entry indexed array KING_AREA_THREATS[8] (threat_count 0-7 →
+        penalty), Texel-tunable. Lets the tuner find the true non-linear shape.
+        Keep existing attacker-weight accumulation (Q=5, R=3, B=2, N=2, P=1)
+        → clamp to [0,7] → look up array. Reference shape: roughly
+        [0, 0, 0, 0, 0, 40, 85, 165] cp (exponential growth). 8 new tp[]
+        MG-only params (king danger is MG-only in our engine).
 
     --- Infrastructure ---
 
@@ -478,6 +543,20 @@ Bot Version History:
                        pos3 d6=11030083, CMK d3=62379.
                        Source: c_rewrite/v19_engine.c
                        Binary: c_rewrite/v19_engine (compiled with gcc -O3 -march=native -pthread)
+
+    v24 - v23 + 3 MSE-tested eval improvements. King area threats as tunable
+                       8-entry array (replaces quadratic penalty=danger^2/4, init {0,0,1,4,10,20,36,56},
+                       MSE Δ−0.00002); Passed pawn rank-indexed MG+EG arrays replacing flat scalars
+                       (tp[756-771], init MG {0,5,10,15,25,40,60,80} EG {-33,5,20,50,60,55,45,30},
+                       MSE Δ−0.00033); Inner/outer mobility weighting replacing isqrt_x20 formula
+                       (INNER_SQUARES=c3-f6, 8 per-piece multipliers tp[772-779], MSE Δ−0.00003).
+                       Total MSE improvement vs v23 baseline: 0.17735→0.17697 (Δ−0.00038).
+                       TP_COUNT=780. Perft: startpos d5=4865609.
+                       Tested+skipped in vTest: Split backward pawn (MSE worse), Chained pawn
+                       rank-indexed (MSE worse), IIR/LMR-PV/LMP-filter (pure search, needs game test).
+                       Source: c_rewrite/v24_engine.c
+                       Binary: c_rewrite/v24_engine (compiled with gcc -O3 -march=native -pthread)
+                       Deployed: Hetzner CPX11 server.
 
     v23 - v22 + Mate Distance Pruning + ETT cache + Endgame Scaling (Texel-tuned).
                        Search: Mate Distance Pruning (tighten alpha/beta by ply-to-mate,
