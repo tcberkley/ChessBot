@@ -3035,20 +3035,6 @@ typedef struct {
 #define PAWN_HASH_MASK (PAWN_HASH_SIZE - 1)
 static pawn_hash_entry pawn_table[PAWN_HASH_SIZE];
 
-// Eval TT Cache (ETT) — caches evaluate() results keyed on Zobrist hash
-#define ETT_SIZE  131072
-#define ETT_MASK  (ETT_SIZE - 1)
-typedef struct { U64 key; int score; } ett_entry;
-static ett_entry eval_cache[ETT_SIZE];
-
-// Correction history — adjusts static_eval based on pawn structure / material
-#define CORR_HIST_SIZE  16384
-#define CORR_HIST_MASK  (CORR_HIST_SIZE - 1)
-#define CORR_GRAIN      256
-#define CORR_MAX        32768
-static short pawn_corr[2][CORR_HIST_SIZE];   // [color][pawn_key & mask]
-static short mat_corr [2][CORR_HIST_SIZE];   // [color][material_key & mask]
-
 // Compute pawn structure score for one side; sets *out_passed to passed pawn bitboard.
 // Called from evaluate() to fill the pawn hash table on a miss.
 static int pawn_eval_side(int color, int phase, U64 *out_passed)
@@ -3086,20 +3072,6 @@ static int pawn_eval_side(int color, int phase, U64 *out_passed)
             int pass_bonus_eg   = TP_PASSED_EG * advancement / 6;
             score += (pass_bonus_mg * phase + pass_bonus_eg * (TOTAL_PHASE - phase)) / TOTAL_PHASE;
             passed_bb |= (1ULL << sq);
-
-            // Free passed pawn: no enemy non-pawn pieces blocking the promotion path
-            {
-                int ep_piece   = (color == white) ? p : P;
-                U64 path_mask  = (color == white)
-                    ? (white_passed_masks[sq] & file_masks[sq & 7])
-                    : (black_passed_masks[sq] & file_masks[sq & 7]);
-                U64 enemy_non_pawns = occupancies[1 - color] & ~bitboards[ep_piece];
-                if (!(enemy_non_pawns & path_mask)) {
-                    int adv_c = advancement < 0 ? 0 : (advancement > 5 ? 5 : advancement);
-                    score += (40 * adv_c / 5) * phase / TOTAL_PHASE;
-                    score += (60 * adv_c / 5) * (TOTAL_PHASE - phase) / TOTAL_PHASE;
-                }
-            }
         } else if (count_bits(pm_blockers) == 1) {
             // v19: Candidate passed pawn — exactly one enemy pawn blocking the passed mask
             int advancement = (color == white) ? (7 - rank) : rank;
@@ -3443,65 +3415,11 @@ static inline int evaluate_side(int color, int phase, int pawn_score_in, U64 own
                     pop_bit(eq_bb, esq);
                 }
 
-                // Safe check bonuses — enemy pieces that can give check from
-                // a square not defended by our pawns (additive to king_danger)
-                {
-                    U64 own_pawn_bb_sc = own_pawns_bb;
-                    U64 own_pawn_atk_sc;
-                    if (color == white)
-                        own_pawn_atk_sc = ((own_pawn_bb_sc >> 9) & ~file_masks[0])
-                                        | ((own_pawn_bb_sc >> 7) & ~file_masks[7]);
-                    else
-                        own_pawn_atk_sc = ((own_pawn_bb_sc << 7) & ~file_masks[0])
-                                        | ((own_pawn_bb_sc << 9) & ~file_masks[7]);
-
-                    // Safe = not defended by own pawns, not occupied by enemy pieces
-                    U64 safe_sq = ~own_pawn_atk_sc & ~occupancies[color];
-
-                    // Knight safe checks
-                    U64 kn_chk_sqs = knight_attacks[sq] & safe_sq;
-                    if (kn_chk_sqs) {
-                        U64 ek_bb2 = bitboards[enemy_knight];
-                        while (ek_bb2) {
-                            int esq2 = get_ls1b_index(ek_bb2);
-                            if (knight_attacks[esq2] & kn_chk_sqs) king_danger += 3;
-                            pop_bit(ek_bb2, esq2);
-                        }
-                    }
-                    // Rook safe checks
-                    U64 rk_chk_sqs = get_rook_attacks(sq, occ_all) & safe_sq;
-                    if (rk_chk_sqs) {
-                        U64 er_bb2 = bitboards[enemy_rook];
-                        while (er_bb2) {
-                            int esq2 = get_ls1b_index(er_bb2);
-                            if (get_rook_attacks(esq2, occ_all) & rk_chk_sqs) king_danger += 4;
-                            pop_bit(er_bb2, esq2);
-                        }
-                    }
-                    // Bishop safe checks
-                    U64 bi_chk_sqs = get_bishop_attacks(sq, occ_all) & safe_sq;
-                    if (bi_chk_sqs) {
-                        U64 eb_bb2 = bitboards[enemy_bishop];
-                        while (eb_bb2) {
-                            int esq2 = get_ls1b_index(eb_bb2);
-                            if (get_bishop_attacks(esq2, occ_all) & bi_chk_sqs) king_danger += 2;
-                            pop_bit(eb_bb2, esq2);
-                        }
-                    }
-                }
-
                 // Non-linear danger penalty (quadratic, capped at 150 cp)
                 if (king_danger > 0) {
                     int penalty = king_danger * king_danger / 4;
                     if (penalty > 150) penalty = 150;
                     score -= penalty;
-                }
-
-                // Virtual mobility: queen reachable squares from king's position = exposure penalty
-                {
-                    U64 king_virt_bb = get_queen_attacks(sq, occ_all);
-                    int virtual_mob  = count_bits(king_virt_bb & ~occupancies[color]);
-                    score -= (virtual_mob * 2) * phase / TOTAL_PHASE;
                 }
             }
         }
@@ -3679,80 +3597,9 @@ static inline int evaluate()
     }
 
     int score = white_score - black_score;
-
-    // Endgame scaling for drawish material configurations
-    {
-        int w_pawns   = count_bits(bitboards[P]);
-        int b_pawns   = count_bits(bitboards[p]);
-        int tot_pawns = w_pawns + b_pawns;
-        int w_bishops = count_bits(bitboards[B]);
-        int b_bishops = count_bits(bitboards[b]);
-        int w_queens  = count_bits(bitboards[Q]);
-        int b_queens  = count_bits(bitboards[q]);
-        int w_rooks   = count_bits(bitboards[R]);
-        int b_rooks   = count_bits(bitboards[r]);
-        int w_minors  = count_bits(bitboards[N]) + w_bishops;
-        int b_minors  = count_bits(bitboards[n]) + b_bishops;
-
-        // Opposite-colored bishops (no queens): scale eval toward draw
-        if (w_bishops == 1 && b_bishops == 1 && w_queens == 0 && b_queens == 0) {
-            int wb_sq2 = get_ls1b_index(bitboards[B]);
-            int bb_sq2 = get_ls1b_index(bitboards[b]);
-            int wb_col = ((wb_sq2 >> 3) + (wb_sq2 & 7)) & 1;
-            int bb_col = ((bb_sq2 >> 3) + (bb_sq2 & 7)) & 1;
-            if (wb_col != bb_col) {
-                int scale = 128 + tot_pawns * 8;  // 50% at 0 pawns, 100% at 16 pawns
-                if (scale > 256) scale = 256;
-                score = score * scale / 256;
-            }
-        }
-
-        // Lone rooks vs lone rooks (no queens, no minors): scale toward draw
-        if (w_queens == 0 && b_queens == 0 && w_minors == 0 && b_minors == 0
-            && w_rooks == 1 && b_rooks == 1) {
-            int scale = 128 + tot_pawns * 10;
-            if (scale > 256) scale = 256;
-            score = score * scale / 256;
-        }
-    }
-
     return (side == white) ? score : -score;
 }
 
-// Correction history helpers
-static inline U64 get_corr_pawn_key(void) {
-    return bitboards[P] * 0x9e3779b97f4a7c15ULL
-         ^ bitboards[p] * 0x6c62272e07bb0142ULL;
-}
-
-static inline int get_corr_mat_key(void) {
-    return (int)((U64)count_bits(bitboards[N]) * 1    +
-                 (U64)count_bits(bitboards[B]) * 3    +
-                 (U64)count_bits(bitboards[R]) * 9    +
-                 (U64)count_bits(bitboards[Q]) * 27   +
-                 (U64)count_bits(bitboards[n]) * 81   +
-                 (U64)count_bits(bitboards[b]) * 243  +
-                 (U64)count_bits(bitboards[r]) * 729  +
-                 (U64)count_bits(bitboards[q]) * 2187) & CORR_HIST_MASK;
-}
-
-static inline void update_corr(short *table, int idx, int depth, int diff) {
-    int weight  = depth * depth < 128 ? depth * depth : 128;
-    int new_val = (int)table[idx] + (diff * CORR_GRAIN - (int)table[idx]) * weight / 512;
-    if (new_val >  CORR_MAX) new_val =  CORR_MAX;
-    if (new_val < -CORR_MAX) new_val = -CORR_MAX;
-    table[idx] = (short)new_val;
-}
-
-// ETT: cached evaluate() — avoids redundant evaluate() calls via small hash table
-static inline int cached_evaluate(void) {
-    unsigned int idx = (unsigned int)(hash_key & ETT_MASK);
-    if (eval_cache[idx].key == hash_key) return eval_cache[idx].score;
-    int s = evaluate();
-    eval_cache[idx].key   = hash_key;
-    eval_cache[idx].score = s;
-    return s;
-}
 
 // Score bounds for mating scores
 #define infinity 50000
@@ -3979,7 +3826,6 @@ int v14_time_budget_ms = 0;    // allocated time for this move in ms
 long v14_search_start = 0;     // start time in ms
 // v14_stopped declared near top of file with other globals
 int v14_hard_limit_ms = 0;     // absolute max time (safety net: don't use >50% of clock)
-int v14_soft_limit_ms = 0;     // dynamic soft limit updated after each depth (0 = disabled)
 #define TIME_CHECK_INTERVAL 4096
 
 // Initialize LMR table
@@ -3993,14 +3839,13 @@ void init_lmr_table()
 // Check if we should stop searching (time + GUI input)
 static inline void check_time()
 {
-    if (v14_soft_limit_ms > 0) {
+    if (v14_time_budget_ms > 0) {
         long elapsed = get_time_ms() - v14_search_start;
-        if (elapsed > v14_soft_limit_ms)
+        // Normal budget: stop at 90%
+        if (elapsed > (long)(v14_time_budget_ms * 0.9))
             v14_stopped = 1;
-    }
-    if (v14_hard_limit_ms > 0) {
-        long elapsed = get_time_ms() - v14_search_start;
-        if (elapsed > v14_hard_limit_ms)
+        // Hard safety limit: never exceed this (prevents losing on time)
+        if (v14_hard_limit_ms > 0 && elapsed > v14_hard_limit_ms)
             v14_stopped = 1;
     }
     // NOTE: Do NOT call read_input() here. raw read() can consume
@@ -4287,15 +4132,6 @@ static inline int negamax(int alpha, int beta, int depth, int null_ok)
 
     int in_check = is_in_check();
 
-    // Mate distance pruning — tighten alpha/beta to shortest possible mate
-    {
-        int mated_now  = -mate_value + ply;
-        int mating_now =  mate_value - ply;
-        if (alpha < mated_now)  alpha = mated_now;
-        if (beta  > mating_now) beta  = mating_now;
-        if (alpha >= beta) return alpha;
-    }
-
     // Check extension
     if (in_check && ply < max_ply - 5)
         depth++;
@@ -4307,12 +4143,6 @@ static inline int negamax(int alpha, int beta, int depth, int null_ok)
     // Max ply overflow
     if (ply > max_ply - 1)
         return evaluate();
-
-    // Pre-compute raw eval for pruning decisions and correction history
-    // (ETT makes repeated calls cheap; guards ensure it's only done on meaningful nodes)
-    int raw_eval = 0;
-    if (!in_check && depth > 0 && ply < max_ply - 1)
-        raw_eval = cached_evaluate();
 
     // Null move pruning
     int game_phase = get_game_phase();
@@ -4394,15 +4224,8 @@ static inline int negamax(int alpha, int beta, int depth, int null_ok)
     // Futility pruning setup (compute eval once for both forward and reverse)
     int futile = 0;
     if (depth <= 3 && !in_check && !pv_node) {
-        // Apply correction history to get adjusted static eval
-        int pawn_c_idx = (int)(get_corr_pawn_key() & CORR_HIST_MASK);
-        int mat_c_idx  = get_corr_mat_key();
-        int corr_adj   = ((int)pawn_corr[side][pawn_c_idx]
-                        + (int)mat_corr [side][mat_c_idx ]) / CORR_GRAIN;
-        // Tempo bonus (+10 cp) + correction history adjustment
-        int static_eval = raw_eval + 10 + corr_adj;
-        if (static_eval >  3000) static_eval =  3000;
-        if (static_eval < -3000) static_eval = -3000;
+        // Tempo bonus: side to move has a slight initiative advantage (+10 cp)
+        int static_eval = evaluate() + 10;
 
         // Reverse futility pruning: if eval - margin >= beta, this node is too good
         // for opponent to allow, so prune it
@@ -4688,16 +4511,6 @@ static inline int negamax(int alpha, int beta, int depth, int null_ok)
             return 0;
     }
 
-    // Update correction history based on search result vs raw eval
-    if (!in_check && raw_eval != 0 && depth >= 1
-        && abs(best_score) < mate_score && best_move) {
-        int diff    = best_score - raw_eval;
-        int p_c_idx = (int)(get_corr_pawn_key() & CORR_HIST_MASK);
-        int m_c_idx = get_corr_mat_key();
-        update_corr(pawn_corr[side], p_c_idx, depth, diff);
-        update_corr(mat_corr [side], m_c_idx, depth, diff);
-    }
-
     // Store TT entry
     write_hash_entry(alpha, depth, hash_flag, best_move);
 
@@ -4819,7 +4632,6 @@ void search_position(int max_depth, int time_budget_ms)
     stopped = 0;
     v14_search_start = get_time_ms();
     v14_time_budget_ms = time_budget_ms;
-    v14_soft_limit_ms = (time_budget_ms > 0) ? (int)(time_budget_ms * 0.90f) : 0;
 
     memset(killer_moves, 0, sizeof(killer_moves));
     memset(history_moves, 0, sizeof(history_moves));
@@ -4864,14 +4676,11 @@ void search_position(int max_depth, int time_budget_ms)
     else if (time_budget_ms < 5000) min_depth = 4;
     else min_depth = 5;
 
-    // v22: dynamic scaled budget (updated after each depth based on stability)
-    int scaled_budget = time_budget_ms;
-
     for (int current_depth = 1; current_depth <= max_depth; current_depth++) {
-        // Time check: don't start new depth if 55%+ of scaled budget used
+        // Time check: don't start new depth if 55%+ of budget used
         if (time_budget_ms > 0 && current_depth > min_depth) {
             long elapsed = get_time_ms() - v14_search_start;
-            if (elapsed > (long)(scaled_budget * 0.55f))
+            if (elapsed > (long)(time_budget_ms * 0.55))
                 break;
         }
 
@@ -4920,7 +4729,7 @@ void search_position(int max_depth, int time_budget_ms)
             best_ponder_move = (pv_length[0] >= 2 && pv_table[0][1]) ? pv_table[0][1] : 0;
         }
 
-        // v22: continuous time scaling based on move stability and score trend
+        // v16: score instability / easy move detection
         {
             int score_swing = score - prev_score;
             if (score_swing < 0) score_swing = -score_swing;
@@ -4928,37 +4737,15 @@ void search_position(int max_depth, int time_budget_ms)
                 move_stability++;
             else
                 move_stability = 0;
-
-            if (time_budget_ms > 0 && current_depth > min_depth) {
-                float scale = 1.0f;
-
-                // Stability-based time reduction (best move unchanged for N depths)
-                if      (move_stability >= 5 && score_swing < 15) scale = 0.50f;
-                else if (move_stability >= 4 && score_swing < 25) scale = 0.65f;
-                else if (move_stability >= 3 && score_swing < 35) scale = 0.75f;
-
-                // Instability-based time extension (overrides reduction)
-                if (best_move_found != prev_best_move) {          // move just changed
-                    if (scale < 1.25f) scale = 1.25f;
-                }
-                if (score < prev_score - 50) {                    // score dropped >50cp
-                    if (scale < 1.50f) scale = 1.50f;
-                }
-                if (score_swing > 80) {                           // large swing either dir
-                    if (scale < 1.30f) scale = 1.30f;
-                }
-
-                // Apply scale; cap at hard limit
-                scaled_budget = (int)(time_budget_ms * scale);
-                if (v14_hard_limit_ms > 0 && scaled_budget > v14_hard_limit_ms)
-                    scaled_budget = v14_hard_limit_ms;
-
-                // Update the soft limit used by check_time() between nodes
-                v14_soft_limit_ms = (int)(scaled_budget * 0.90f);
-            }
-
             prev_best_move = best_move_found;
             prev_score = score;
+
+            // Easy move: same best move for 3+ depths, small score swing, past 40% of budget
+            if (current_depth > min_depth && time_budget_ms > 0
+                && move_stability >= 3 && score_swing < 30) {
+                long chk = get_time_ms() - v14_search_start;
+                if (chk > (long)(time_budget_ms * 0.4)) break;
+            }
         }
 
         // Print UCI info
@@ -5353,9 +5140,6 @@ void uci_loop()
         if (strncmp(input, "ucinewgame", 10) == 0) {
             parse_position("position startpos");
             clear_hash_table();
-            memset(eval_cache, 0, sizeof(eval_cache));
-            memset(pawn_corr,  0, sizeof(pawn_corr));
-            memset(mat_corr,   0, sizeof(mat_corr));
             continue;
         }
 

@@ -2782,7 +2782,7 @@ const int v14_piece_values[12] = {
 // The UCI engine reads from tp[] normally. The tuner binary (compiled with -DTUNER)
 // modifies tp[] in place during coordinate descent and writes optimized values on exit.
 
-#define TP_COUNT 747
+#define TP_COUNT 748
 
 // PST accessor macros (indices into tp[])
 #define TP_PST_PAWN_MG(i)   tp[0   + (i)]
@@ -2841,6 +2841,7 @@ const int v14_piece_values[12] = {
 #define TP_EG_OPP_BISH    tp[744]   // Endgame scaling: opp-color bishop scale (out of 128)
 #define TP_EG_ROOK_BASE   tp[745]   // Endgame scaling: lone rook base scale (out of 128)
 #define TP_EG_ROOK_PAWN   tp[746]   // Endgame scaling: lone rook per-pawn addition
+#define TP_EG_KING_PAWN   tp[747]   // v24: endgame king proximity to enemy pawns
 
 int tp[TP_COUNT] = {
     // [0..63] pst_pawn_mg — v20 Texel-tuned (epoch 28, MSE=0.19530318)
@@ -2986,6 +2987,7 @@ int tp[TP_COUNT] = {
      93,  // [744] TP_EG_OPP_BISH  (opp-color bishop scale, 93/128 = 72.7%, Texel-tuned)
     109,  // [745] TP_EG_ROOK_BASE (lone rook base scale, 109/128 = 85.2%, Texel-tuned)
       0,  // [746] TP_EG_ROOK_PAWN (per-pawn addition to rook scale, Texel-tuned)
+      5,  // [747] TP_EG_KING_PAWN (v24: endgame king proximity to enemy pawns)
 };
 
 // Precomputed integer sqrt*20 table for mobility scoring
@@ -3483,6 +3485,21 @@ static inline int evaluate_side(int color, int phase, int pawn_score_in, U64 own
                     score += ep_cheb * TP_KPASS_ENE;
                     pop_bit(pp_bb, psq);
                 }
+            }
+
+            // v24: King proximity to enemy pawns in endgame (king hunts enemy pawns)
+            if (enemy_pawns_bb) {
+                U64 epb2 = enemy_pawns_bb;
+                int best_ep_dist = 8;
+                while (epb2) {
+                    int epsq = get_ls1b_index(epb2);
+                    int epr = epsq >> 3, epf = epsq & 7;
+                    int d = (rank > epr ? rank - epr : epr - rank) > (file > epf ? file - epf : epf - file)
+                            ? (rank > epr ? rank - epr : epr - rank) : (file > epf ? file - epf : epf - file);
+                    if (d < best_ep_dist) best_ep_dist = d;
+                    pop_bit(epb2, epsq);
+                }
+                score += (7 - best_ep_dist) * TP_EG_KING_PAWN;
             }
 
             // v16: King mobility bonus in endgame — king is an active piece
@@ -5398,6 +5415,8 @@ static void clamp_params() {
     if (tp[745] > 128) tp[745] = 128;
     if (tp[746] < 0)   tp[746] = 0;   // EG_ROOK_PAWN: non-negative
     if (tp[746] > 8)   tp[746] = 8;
+    if (tp[747] < 0)   tp[747] = 0;   // EG_KING_PAWN: non-negative
+    if (tp[747] > 20)  tp[747] = 20;
 }
 
 static void calibrate_K() {
@@ -5457,6 +5476,8 @@ static void print_params(double mse, int epoch) {
     printf("  tp[744] = %4d  // EG_OPP_BISH\n",  tp[744]);
     printf("  tp[745] = %4d  // EG_ROOK_BASE\n", tp[745]);
     printf("  tp[746] = %4d  // EG_ROOK_PAWN\n", tp[746]);
+    // New v24 param
+    printf("  tp[747] = %4d  // EG_KING_PAWN\n", tp[747]);
     fflush(stdout);
 }
 

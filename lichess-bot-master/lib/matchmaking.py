@@ -21,7 +21,13 @@ LICHESS_TYPE = Union[lichess.Lichess, test_bot.lichess.Lichess]
 logger = logging.getLogger(__name__)
 
 daily_challenges_file_name = "daily_challenge_times.txt"
+daily_games_file_name = "daily_game_times.txt"
 timestamp_format = "%Y-%m-%d %H:%M:%S\n"
+
+DAILY_CHALLENGE_LIMIT = 250
+DAILY_GAME_LIMIT = 100
+NEAR_LIMIT_THRESHOLD = 0.95
+RAPID_FALLBACK_TCS = [(600, 0), (600, 5), (900, 0), (900, 10)]  # (base_time, increment): 10+0, 10+5, 15+0, 15+10
 
 
 def read_daily_challenges() -> DAILY_TIMERS_TYPE:
@@ -44,6 +50,25 @@ def write_daily_challenges(daily_challenges: DAILY_TIMERS_TYPE) -> None:
             file.write(timer.starting_timestamp(timestamp_format))
 
 
+def read_daily_games() -> DAILY_TIMERS_TYPE:
+    """Read the games played in the past 24 hours from a text file."""
+    timers: DAILY_TIMERS_TYPE = []
+    try:
+        with open(daily_games_file_name) as file:
+            for line in file:
+                timers.append(Timer(days(1), datetime.datetime.strptime(line, timestamp_format)))
+    except FileNotFoundError:
+        pass
+    return [timer for timer in timers if not timer.is_expired()]
+
+
+def write_daily_games(daily_games: DAILY_TIMERS_TYPE) -> None:
+    """Write the games played in the past 24 hours to a text file."""
+    with open(daily_games_file_name, "w") as file:
+        for timer in daily_games:
+            file.write(timer.starting_timestamp(timestamp_format))
+
+
 class Matchmaking:
     """Challenge other bots."""
 
@@ -62,6 +87,7 @@ class Matchmaking:
         self.max_wait_time = minutes(10) if self.matchmaking_cfg.allow_during_games else years(10)
         self.challenge_id = ""
         self.daily_challenges = read_daily_challenges()
+        self.daily_games = read_daily_games()
 
         # (opponent name, game aspect) --> other bot is likely to accept challenge
         # game aspect is the one the challenged bot objects to and is one of:
@@ -157,6 +183,13 @@ class Matchmaking:
         self.min_wait_time = seconds(60) * ((len(self.daily_challenges) // 50) + 1)
         write_daily_challenges(self.daily_challenges)
 
+    def is_near_daily_limit(self) -> bool:
+        """Return True if >= 95% of either the daily challenge-send or daily game limit is used."""
+        challenge_count = len([t for t in self.daily_challenges if not t.is_expired()])
+        game_count = len([t for t in self.daily_games if not t.is_expired()])
+        return (challenge_count >= int(DAILY_CHALLENGE_LIMIT * NEAR_LIMIT_THRESHOLD)
+                or game_count >= int(DAILY_GAME_LIMIT * NEAR_LIMIT_THRESHOLD))
+
     def perf(self) -> dict[str, PerfType]:
         """Get the bot's rating in every variant. Bullet, blitz, rapid etc. are considered different variants."""
         user_perf: dict[str, PerfType] = self.user_profile["perfs"]
@@ -221,9 +254,15 @@ class Matchmaking:
         mode = self.get_random_config_value(match_config, "challenge_mode", ["casual", "rated"])
         rating_preference = match_config.rating_preference
 
-        base_time = random.choice(match_config.challenge_initial_time)
-        increment = random.choice(match_config.challenge_increment)
-        days = random.choice(match_config.challenge_days)
+        if self.is_near_daily_limit():
+            logger.info(f"Near daily limit ({len(self.daily_challenges)} challenges, "
+                        f"{len(self.daily_games)} games) — switching to rapid time controls.")
+            base_time, increment = random.choice(RAPID_FALLBACK_TCS)
+            days = 0
+        else:
+            base_time = random.choice(match_config.challenge_initial_time)
+            increment = random.choice(match_config.challenge_increment)
+            days = random.choice(match_config.challenge_days)
 
         play_correspondence = [bool(days), not bool(base_time or increment)]
         if random.choice(play_correspondence):
@@ -329,6 +368,10 @@ class Matchmaking:
                   base_time: int = 0, increment: int = 0, days: int = 0, mode: str = "rated",
                   opponent_rating: int = 0, my_rating: int = 0) -> None:
         """Challenge as soon as min_wait_time passes after a game ends."""
+        # Track daily completed games for rate-limit awareness
+        self.daily_games = [t for t in self.daily_games if not t.is_expired()]
+        self.daily_games.append(Timer(seconds(86400)))
+        write_daily_games(self.daily_games)
         upset_win = won and opponent_rating > my_rating > 0
         if won and opponent and opponent != self.last_rematched_opponent and upset_win:
             logger.info(f"Won against higher-rated {opponent} ({opponent_rating} vs {my_rating}) — queuing rematch.")
