@@ -71,7 +71,7 @@ class Conversation:
         if cmd == "commands" or cmd == "help":
             self.send_reply(line,
                             "Supported commands: !wait (wait a minute for my first move), !name, "
-                            "!eval (or any text starting with !eval), !queue")
+                            "!eval (or any text starting with !eval), !depth, !nodes, !queue")
         elif cmd == "wait" and self.game.is_abortable():
             self.game.ping(seconds(60), seconds(120), seconds(120))
             self.send_reply(line, "Waiting 60 seconds...")
@@ -83,6 +83,14 @@ class Conversation:
             self.send_reply(line, ", ".join(stats))
         elif is_eval:
             self.send_reply(line, "I don't tell that to my opponent, sorry.")
+        elif cmd == "depth":
+            info = self.engine.move_commentary[-1] if self.engine.move_commentary else {}
+            depth = info.get("depth")
+            self.send_reply(line, f"Depth: {depth}" if depth is not None else "No depth info yet.")
+        elif cmd == "nodes":
+            info = self.engine.move_commentary[-1] if self.engine.move_commentary else {}
+            nodes = info.get("nodes")
+            self.send_reply(line, f"Nodes: {nodes:,}" if nodes is not None else "No node info yet.")
         elif cmd == "queue":
             if self.challengers:
                 challengers = ", ".join([f"@{challenger.challenger.name}" for challenger in reversed(self.challengers)])

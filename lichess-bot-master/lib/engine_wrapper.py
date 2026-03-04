@@ -97,6 +97,7 @@ class EngineWrapper:
         self.go_commands = Configuration(cast(GO_COMMANDS_TYPE, options.pop("go_commands", {})) or {})
         self.move_commentary: list[InfoStrDict] = []
         self.comment_start_index = -1
+        self.mate_announced_games: set = set()
 
     def configure(self, options: OPTIONS_GO_EGTB_TYPE, game: Optional[model.Game]) -> None:
         """
@@ -190,6 +191,20 @@ class EngineWrapper:
                     game_ender = li.abort if game.is_abortable() else li.resign
                     game_ender(game.id)
                 raise
+
+        # Announce forced mate once per game (first time we spot it)
+        if best_move.move is not None and game.id not in self.mate_announced_games:
+            try:
+                score = best_move.info.get("score")
+                if score is not None:
+                    mate = score.relative.mate()
+                    if mate is not None and mate > 0:
+                        msg = f"Mate in {mate}!"
+                        li.chat(game.id, "player", msg)
+                        li.chat(game.id, "spectator", msg)
+                        self.mate_announced_games.add(game.id)
+            except Exception:
+                pass
 
         # Heed min_time
         elapsed = setup_timer.time_since_reset()
