@@ -3967,6 +3967,9 @@ int countermove[12][64];
 __thread int prev_move_piece;
 __thread int prev_move_to;
 
+// Static eval history per ply for improving flag
+__thread int static_evals_by_ply[max_ply];
+
 // Capture history [attacker_piece][to_sq][captured_piece]
 int capture_history[12][64][12];
 
@@ -4160,26 +4163,22 @@ static inline int score_move(int move, int tt_move)
     }
 }
 
-// Sort moves by score (selection sort for simplicity)
-static inline void sort_moves(moves *move_list, int tt_move)
+// Score all moves into caller-supplied array (lazy sort phase 1)
+static inline void score_moves(moves *move_list, int *move_scores, int tt_move)
 {
-    int move_scores[256];
     for (int i = 0; i < move_list->count; i++)
         move_scores[i] = score_move(move_list->moves[i], tt_move);
+}
 
-    for (int i = 0; i < move_list->count; i++) {
-        for (int j = i + 1; j < move_list->count; j++) {
-            if (move_scores[i] < move_scores[j]) {
-                // Swap scores
-                int tmp = move_scores[i];
-                move_scores[i] = move_scores[j];
-                move_scores[j] = tmp;
-                // Swap moves
-                tmp = move_list->moves[i];
-                move_list->moves[i] = move_list->moves[j];
-                move_list->moves[j] = tmp;
-            }
-        }
+// Swap the best remaining move into position `start` (lazy sort phase 2, called per iteration)
+static inline void pick_best_move(moves *move_list, int *move_scores, int start)
+{
+    int best = start;
+    for (int j = start + 1; j < move_list->count; j++)
+        if (move_scores[j] > move_scores[best]) best = j;
+    if (best != start) {
+        int tmp = move_scores[start]; move_scores[start] = move_scores[best]; move_scores[best] = tmp;
+        tmp = move_list->moves[start]; move_list->moves[start] = move_list->moves[best]; move_list->moves[best] = tmp;
     }
 }
 
@@ -4219,9 +4218,11 @@ static inline int quiescence(int alpha, int beta)
     // Generate all moves, filter to captures only
     moves move_list[1];
     generate_moves(move_list);
-    sort_moves(move_list, 0);
+    int move_scores[256];
+    score_moves(move_list, move_scores, 0);
 
     for (int count = 0; count < move_list->count; count++) {
+        pick_best_move(move_list, move_scores, count);
         int move = move_list->moves[count];
 
         // Skip non-captures (captures sorted first, so break when we hit a quiet)
@@ -4371,8 +4372,12 @@ static inline int negamax(int alpha, int beta, int depth, int null_ok)
 
 #ifndef TUNER
     // Compute raw static eval for correction history (all real non-check nodes)
-    if (!in_check)
+    int improving = 0;
+    if (!in_check) {
         raw_eval = evaluate() + 10;
+        if (ply < max_ply) static_evals_by_ply[ply] = raw_eval;
+        improving = (ply >= 2 && raw_eval > static_evals_by_ply[ply - 2]);
+    }
 #endif
 
     // Null move pruning
@@ -4391,7 +4396,7 @@ static inline int negamax(int alpha, int beta, int depth, int null_ok)
         side ^= 1;
         hash_key ^= side_key;
 
-        int R = 3 + depth / 6; if (R >= depth) R = depth - 1;
+        int R = 3 + depth / 6 + (!improving); if (R >= depth) R = depth - 1;
         int null_score = -negamax(-beta, -beta + 1, depth - 1 - R, 0);
 
         ply--;
@@ -4587,16 +4592,18 @@ static inline int negamax(int alpha, int beta, int depth, int null_ok)
         prev_move_to    = cm_to;
     }
 
-    // Generate and sort remaining moves
+    // Generate and sort remaining moves (lazy: score upfront, pick-best per iteration)
     moves move_list[1];
     generate_moves(move_list);
-    sort_moves(move_list, tt_best_move);
+    int move_scores[256];
+    score_moves(move_list, move_scores, tt_best_move);
 
     // v19: LMP threshold — quiet moves tried before pruning (indexed by depth)
     static const int lmp_threshold[4] = {0, 5, 10, 18};
     int quiets_tried = 0;
 
     for (int count = 0; count < move_list->count; count++) {
+        pick_best_move(move_list, move_scores, count);
         int move = move_list->moves[count];
         if (move == tt_best_move) continue;       // already tried in pre-try stage
         if (move == se_excluded_move) continue;   // excluded from SE verification search
@@ -4621,7 +4628,7 @@ static inline int negamax(int alpha, int beta, int depth, int null_ok)
 
         // v19: LMP — skip quiet moves past threshold at shallow depth
         if (!in_check && !pv_node && depth <= 3 && !is_capture && !is_promotion
-            && legal_moves_count > 0 && quiets_tried >= lmp_threshold[depth])
+            && legal_moves_count > 0 && quiets_tried >= lmp_threshold[depth] + improving * 3)
             continue;
 
         copy_board();
@@ -4859,6 +4866,7 @@ static void* worker_thread(void* arg) {
     prev_move_piece = 0;
     prev_move_to = 0;
     se_excluded_move = 0;
+    memset(static_evals_by_ply, 0, sizeof(static_evals_by_ply));
     memset(pv_table, 0, sizeof(pv_table));
     memset(pv_length, 0, sizeof(pv_length));
 
@@ -4895,6 +4903,7 @@ void search_position(int max_depth, int time_budget_ms)
     prev_move_piece = 0;
     prev_move_to = 0;
     se_excluded_move = 0;
+    memset(static_evals_by_ply, 0, sizeof(static_evals_by_ply));
 
 #ifndef TUNER
     // Root TB probe: instantly play the DTZ-optimal move for positions covered by tablebases.
@@ -4951,6 +4960,32 @@ void search_position(int max_depth, int time_budget_ms)
         // TB_DRAW / TB_LOSS / probe failed: fall through to normal alpha-beta
     }
 #endif
+
+    // Forced move: if only one legal move exists, play it instantly without searching.
+    if (!is_pondering) {
+        moves root_moves[1];
+        generate_moves(root_moves);
+        int legal_count = 0, only_move = 0;
+        for (int i = 0; i < root_moves->count && legal_count <= 1; i++) {
+            { // nested block required: copy_board() declares locals
+                copy_board();
+                if (make_move(root_moves->moves[i], all_moves)) {
+                    take_back();
+                    legal_count++;
+                    only_move = root_moves->moves[i];
+                }
+            }
+        }
+        if (legal_count == 1) {
+            printf("info depth 1 score cp 0 time 0 nodes 1 pv ");
+            print_move(only_move);
+            printf("\nbestmove ");
+            print_move(only_move);
+            printf("\n");
+            fflush(stdout);
+            return;
+        }
+    }
 
     // Save board state for worker threads and spawn them
     pthread_t worker_threads[MAX_THREADS];
