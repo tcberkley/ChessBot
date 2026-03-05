@@ -3973,6 +3973,16 @@ int capture_history[12][64][12];
 // 1-ply continuation history [prev_piece][prev_to][cur_piece][cur_to]
 short cont_hist[12][64][12][64];
 
+// 2-ply continuation history [prev2_piece][prev2_to][cur_piece][cur_to]
+short cont_hist2[12][64][12][64];
+
+// Previous-previous move tracking for 2-ply cont hist
+__thread int prev2_move_piece;
+__thread int prev2_move_to;
+
+// Static eval history per ply for improving flag
+__thread int static_evals_by_ply[max_ply];
+
 // Correction history: adjusts static_eval based on historical score error
 #ifndef TUNER
 #define CORR_SIZE 16384
@@ -4156,6 +4166,9 @@ static inline int score_move(int move, int tt_move)
             int cont = cont_hist[prev_move_piece][prev_move_to][get_move_piece(move)][get_move_target(move)];
             hist += cont;
         }
+        if (prev2_move_piece) {
+            hist += cont_hist2[prev2_move_piece][prev2_move_to][get_move_piece(move)][get_move_target(move)];
+        }
         return hist;
     }
 }
@@ -4205,6 +4218,12 @@ static inline int quiescence(int alpha, int beta)
     }
 
     int stand_pat = evaluate();
+#ifndef TUNER
+    {
+        int corr = corr_hist[hash_key & CORR_MASK];
+        stand_pat += corr / CORR_GRAIN;   // Feature 1: correction applied to qsearch eval
+    }
+#endif
 
     if (stand_pat >= beta)
         return beta;
@@ -4369,10 +4388,17 @@ static inline int negamax(int alpha, int beta, int depth, int null_ok)
     if (ply > max_ply - 1)
         return evaluate();
 
+    // Static eval and improving flag (non-tuner: correction history applied broadly)
+    int static_eval = 0;
+    int improving = 0;
 #ifndef TUNER
-    // Compute raw static eval for correction history (all real non-check nodes)
-    if (!in_check)
+    if (!in_check) {
         raw_eval = evaluate() + 10;
+        int corr = corr_hist[hash_key & CORR_MASK];
+        static_eval = raw_eval + corr / CORR_GRAIN;   // Feature 1: correction to eval
+        if (ply < max_ply) static_evals_by_ply[ply] = static_eval;
+        improving = (ply >= 2 && static_evals_by_ply[ply] > static_evals_by_ply[ply - 2]);
+    }
 #endif
 
     // Null move pruning
@@ -4391,7 +4417,7 @@ static inline int negamax(int alpha, int beta, int depth, int null_ok)
         side ^= 1;
         hash_key ^= side_key;
 
-        int R = 3 + depth / 6; if (R >= depth) R = depth - 1;
+        int R = 3 + depth / 6 + (!improving); if (R >= depth) R = depth - 1;
         int null_score = -negamax(-beta, -beta + 1, depth - 1 - R, 0);
 
         ply--;
@@ -4452,16 +4478,13 @@ static inline int negamax(int alpha, int beta, int depth, int null_ok)
         prev_move_to    = saved_cm_t;
     }
 
-    // Futility pruning setup (compute eval once for both forward and reverse)
+    // Futility pruning setup
     int futile = 0;
     if (depth <= 3 && !in_check && !pv_node) {
-        // Tempo bonus: side to move has a slight initiative advantage (+10 cp)
-#ifndef TUNER
-        int corr = corr_hist[hash_key & CORR_MASK];
-        int static_eval = raw_eval + corr / CORR_GRAIN;
-#else
-        int static_eval = evaluate() + 10;
+#ifdef TUNER
+        static_eval = evaluate() + 10;   // tuner mode: compute here (correction not used)
 #endif
+        // non-tuner: static_eval already computed above with correction history
 
         // Reverse futility pruning: if eval - margin >= beta, this node is too good
         // for opponent to allow, so prune it
@@ -4490,6 +4513,8 @@ static inline int negamax(int alpha, int beta, int depth, int null_ok)
     // Save opponent's last move for countermove heuristic lookup/storage
     int cm_piece = prev_move_piece;
     int cm_to = prev_move_to;
+    int cm2_piece = prev2_move_piece;   // grandparent move for 2-ply cont hist
+    int cm2_to = prev2_move_to;
 
     // v18: Singular extension — if the TT move is the only good move at this node, extend it.
     // Conditions: non-PV, depth>=8, have a TT move, not in check, not at root,
@@ -4504,7 +4529,11 @@ static inline int negamax(int alpha, int beta, int depth, int null_ok)
             && se_tt_score > -mate_score && se_tt_score < mate_score) {
             int se_beta = se_tt_score - 25 * depth;
             se_excluded_move = tt_best_move;
+            prev2_move_piece = cm2_piece;   // set grandparent for SE child
+            prev2_move_to    = cm2_to;
             int se_score = negamax(se_beta - 1, se_beta, depth / 2, 0);
+            prev2_move_piece = cm2_piece;   // restore (SE recursion may have overwritten)
+            prev2_move_to    = cm2_to;
             se_excluded_move = 0;
             if (!v14_stopped && se_score < se_beta)
                 se_extension = 1;
@@ -4523,8 +4552,10 @@ static inline int negamax(int alpha, int beta, int depth, int null_ok)
         ply++;
         repetition_index++;
         repetition_table[repetition_index] = hash_key;
-        prev_move_piece = get_move_piece(tt_best_move);
-        prev_move_to    = get_move_target(tt_best_move);
+        prev2_move_piece = cm_piece;             // grandparent for TT-move child
+        prev2_move_to    = cm_to;
+        prev_move_piece  = get_move_piece(tt_best_move);
+        prev_move_to     = get_move_target(tt_best_move);
 
         if (make_move(tt_best_move, all_moves)) {
             legal_moves_count = 1;
@@ -4541,7 +4572,8 @@ static inline int negamax(int alpha, int beta, int depth, int null_ok)
             repetition_index--;
             take_back();
 
-            if (v14_stopped) { prev_move_piece = cm_piece; prev_move_to = cm_to; return 0; }
+            if (v14_stopped) { prev2_move_piece = cm2_piece; prev2_move_to = cm2_to;
+                               prev_move_piece = cm_piece; prev_move_to = cm_to; return 0; }
 
             if (tt_score > best_score) {
                 best_score = tt_score;
@@ -4573,9 +4605,17 @@ static inline int negamax(int alpha, int beta, int depth, int null_ok)
                             int cv = (int)*ch + cb - (int)*ch * cb / 16384;
                             *ch = (short)(cv > 32767 ? 32767 : (cv < -32768 ? -32768 : cv));
                         }
+                        if (cm2_piece) {
+                            int cb2 = depth * depth;
+                            short *ch2 = &cont_hist2[cm2_piece][cm2_to][get_move_piece(tt_best_move)][get_move_target(tt_best_move)];
+                            int cv2 = (int)*ch2 + cb2 - (int)*ch2 * cb2 / 16384;
+                            *ch2 = (short)(cv2 > 32767 ? 32767 : (cv2 < -32768 ? -32768 : cv2));
+                        }
                     }
-                    prev_move_piece = cm_piece;
-                    prev_move_to    = cm_to;
+                    prev2_move_piece = cm2_piece;
+                    prev2_move_to    = cm2_to;
+                    prev_move_piece  = cm_piece;
+                    prev_move_to     = cm_to;
                     return beta;
                 }
             }
@@ -4583,8 +4623,10 @@ static inline int negamax(int alpha, int beta, int depth, int null_ok)
             ply--;
             repetition_index--;
         }
-        prev_move_piece = cm_piece;
-        prev_move_to    = cm_to;
+        prev2_move_piece = cm2_piece;
+        prev2_move_to    = cm2_to;
+        prev_move_piece  = cm_piece;
+        prev_move_to     = cm_to;
     }
 
     // Generate and sort remaining moves
@@ -4620,9 +4662,21 @@ static inline int negamax(int alpha, int beta, int depth, int null_ok)
             continue;
 
         // v19: LMP — skip quiet moves past threshold at shallow depth
+        // improving: allow 3 more quiet moves when position is trending better
         if (!in_check && !pv_node && depth <= 3 && !is_capture && !is_promotion
-            && legal_moves_count > 0 && quiets_tried >= lmp_threshold[depth])
+            && legal_moves_count > 0 && quiets_tried >= lmp_threshold[depth] + improving * 3)
             continue;
+
+        // History-based capture pruning: skip losing captures with confirmed negative history
+        if (!in_check && depth <= 4 && is_capture && !is_promotion && legal_moves_count >= 1
+            && captured_piece_idx >= 0) {
+            int cap_see = see(get_move_source(move), get_move_target(move),
+                              get_move_piece(move), see_piece_val[captured_piece_idx]);
+            if (cap_see < 0 &&
+                capture_history[get_move_piece(move)][get_move_target(move)][captured_piece_idx] < -1000) {
+                continue;
+            }
+        }
 
         copy_board();
         ply++;
@@ -4639,9 +4693,11 @@ static inline int negamax(int alpha, int beta, int depth, int null_ok)
         // v19: Track quiet moves for LMP
         if (!is_capture && !is_promotion) quiets_tried++;
 
-        // Tell recursive call what our move was (for countermove lookup at depth-1)
-        prev_move_piece = get_move_piece(move);
-        prev_move_to = get_move_target(move);
+        // Tell recursive call what our move was (for countermove and cont_hist lookup at depth-1)
+        prev2_move_piece = cm_piece;             // grandparent for child = opponent's move here
+        prev2_move_to    = cm_to;
+        prev_move_piece  = get_move_piece(move);
+        prev_move_to     = get_move_target(move);
 
         int score;
 
@@ -4710,12 +4766,19 @@ static inline int negamax(int alpha, int beta, int depth, int null_ok)
                         // Countermove heuristic
                         if (cm_piece)
                             countermove[cm_piece][cm_to] = move;
-                        // v18: Continuation history update
+                        // v18: Continuation history update (1-ply)
                         if (cm_piece) {
                             int ch_bonus = depth * depth;
                             short *ch = &cont_hist[cm_piece][cm_to][get_move_piece(move)][get_move_target(move)];
                             int ch_val = (int)*ch + ch_bonus - (int)*ch * ch_bonus / 16384;
                             *ch = (short)(ch_val >  32767 ?  32767 : (ch_val < -32768 ? -32768 : ch_val));
+                        }
+                        // 2-ply continuation history update
+                        if (cm2_piece) {
+                            int ch2_bonus = depth * depth;
+                            short *ch2 = &cont_hist2[cm2_piece][cm2_to][get_move_piece(move)][get_move_target(move)];
+                            int ch2_val = (int)*ch2 + ch2_bonus - (int)*ch2 * ch2_bonus / 16384;
+                            *ch2 = (short)(ch2_val > 32767 ? 32767 : (ch2_val < -32768 ? -32768 : ch2_val));
                         }
                     } else {
                         // v18: Capture history update on cutoff
@@ -4858,9 +4921,12 @@ static void* worker_thread(void* arg) {
     nodes = 0;
     prev_move_piece = 0;
     prev_move_to = 0;
+    prev2_move_piece = 0;
+    prev2_move_to = 0;
     se_excluded_move = 0;
     memset(pv_table, 0, sizeof(pv_table));
     memset(pv_length, 0, sizeof(pv_length));
+    memset(static_evals_by_ply, 0, sizeof(static_evals_by_ply));
 
     int game_phase = get_game_phase();
 
@@ -4894,7 +4960,10 @@ void search_position(int max_depth, int time_budget_ms)
     memset(pv_length, 0, sizeof(pv_length));
     prev_move_piece = 0;
     prev_move_to = 0;
+    prev2_move_piece = 0;
+    prev2_move_to = 0;
     se_excluded_move = 0;
+    memset(static_evals_by_ply, 0, sizeof(static_evals_by_ply));
 
 #ifndef TUNER
     // Root TB probe: instantly play the DTZ-optimal move for positions covered by tablebases.

@@ -4896,6 +4896,62 @@ void search_position(int max_depth, int time_budget_ms)
     prev_move_to = 0;
     se_excluded_move = 0;
 
+#ifndef TUNER
+    // Root TB probe: instantly play the DTZ-optimal move for positions covered by tablebases.
+    // Only when not pondering — ponder thread must not output bestmove early (ponder-early-finish bug).
+    if (!is_pondering && TB_LARGEST > 0 &&
+        count_bits(occupancies[both]) <= (int)TB_LARGEST) {
+        unsigned results[TB_MAX_MOVES];
+        unsigned ep_sq = (enpassant != no_sq) ? (enpassant ^ 56) : 0;
+        unsigned tb_result = tb_probe_root_impl(
+            __builtin_bswap64(occupancies[white]),
+            __builtin_bswap64(occupancies[black]),
+            __builtin_bswap64(bitboards[K] | bitboards[k]),
+            __builtin_bswap64(bitboards[Q] | bitboards[q]),
+            __builtin_bswap64(bitboards[R] | bitboards[r]),
+            __builtin_bswap64(bitboards[B] | bitboards[b]),
+            __builtin_bswap64(bitboards[N] | bitboards[n]),
+            __builtin_bswap64(bitboards[P] | bitboards[p]),
+            halfmove_clock, ep_sq, (side == white), results
+        );
+        if (tb_result != TB_RESULT_FAILED &&
+            tb_result != TB_RESULT_CHECKMATE &&
+            tb_result != TB_RESULT_STALEMATE &&
+            TB_GET_WDL(tb_result) == TB_WIN) {
+            // fathom sq (a1=0) -> BBC sq (a8=0): XOR 56 (symmetric conversion)
+            unsigned from_sq  = TB_GET_FROM(tb_result) ^ 56;
+            unsigned to_sq    = TB_GET_TO(tb_result)   ^ 56;
+            unsigned promotes = TB_GET_PROMOTES(tb_result);
+            moves move_list[1];
+            generate_moves(move_list);
+            int tb_move = 0;
+            for (int i = 0; i < move_list->count; i++) {
+                int m = move_list->moves[i];
+                if ((unsigned)get_move_source(m) != from_sq ||
+                    (unsigned)get_move_target(m) != to_sq) continue;
+                if (promotes != TB_PROMOTES_NONE) {
+                    int pp = get_move_promoted(m);
+                    int want = (side == white)
+                        ? (int[]){0, Q, R, B, N}[promotes]
+                        : (int[]){0, q, r, b, n}[promotes];
+                    if (pp != want) continue;
+                }
+                tb_move = m; break;
+            }
+            if (tb_move) {
+                unsigned dtz = TB_GET_DTZ(tb_result);
+                printf("info depth 0 score cp %d time 0 nodes 1 pv ",
+                       mate_value - (int)dtz);
+                print_move(tb_move); printf("\n");
+                printf("bestmove "); print_move(tb_move); printf("\n");
+                fflush(stdout);
+                return;
+            }
+        }
+        // TB_DRAW / TB_LOSS / probe failed: fall through to normal alpha-beta
+    }
+#endif
+
     // Save board state for worker threads and spawn them
     pthread_t worker_threads[MAX_THREADS];
     WorkerArgs worker_args[MAX_THREADS];
