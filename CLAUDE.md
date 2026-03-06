@@ -10,7 +10,7 @@ Do NOT read, write, or execute anything outside this tree without explicit user 
 - **Lichess bot**: `tombot1234` on Hetzner CPX11 (`178.156.243.29`, Ubuntu 24.04)
 - **Engine**: C (BBC magic bitboard), UCI, multi-threaded (Lazy SMP + pondering)
 - **Bridge**: Python `lichess-bot` in `bot/`
-- **Current deployed**: `v26_engine`
+- **Current deployed**: `v27_engine`
 - **Engine source**: `engine/` | **Fathom Syzygy lib**: `engine/fathom*.{h,c}` + `tbconfig.h` `tbchess.c` `stdendian.h`
 
 ---
@@ -76,7 +76,8 @@ python3 tournament_v22.py --engine1 ./vTest_engine --engine2 ./v25_baseline \
 | Target | Source | Notes |
 |--------|--------|-------|
 | `vTest_engine` | `vTest_engine.c fathom.c` | Working test file — modify freely |
-| `v26_engine` | `v26_engine.c fathom.c` | Current deployed version |
+| `v26_engine` | `v26_engine.c fathom.c` | Previous version |
+| `v27_engine` | `v27_engine.c fathom.c` | Current deployed version |
 | `vTest_tuner` | `vTest_engine.c` | `-DTUNER`, no fathom |
 | `v26_tuner` | `v26_engine.c fathom.c` | `-DTUNER` |
 
@@ -172,6 +173,7 @@ Compile flags: `-O3 -march=native -fomit-frame-pointer -pthread`
 | v24 | King area threats, rank-indexed passed pawn tables, inner/outer mobility, minor→heavy attack bonus; full Texel retune 781 params |
 | v25 | Syzygy WDL probing (fathom), root TB probe, mate-in-X chat, improving flag |
 | v26 | IIR, razoring 450, SE margin 8×depth, double extension, phase-aware futility |
+| v27 | Symmetric history malus (depth² vs depth²/2) + continuation history malus |
 
 ---
 
