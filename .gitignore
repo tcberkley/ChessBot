@@ -9,8 +9,12 @@ __pycache__/
 venv/
 
 # C build artifacts
-c_rewrite/v13_engine
+c_rewrite/v*_engine
+c_rewrite/vTest_engine
+c_rewrite/v*_tuner
+c_rewrite/v*_baseline
 *.o
+mse_curve.png
 
 # macOS
 .DS_Store
