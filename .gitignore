@@ -9,10 +9,10 @@ __pycache__/
 venv/
 
 # C build artifacts
-c_rewrite/v*_engine
-c_rewrite/vTest_engine
-c_rewrite/v*_tuner
-c_rewrite/v*_baseline
+engine/v*_engine
+engine/vTest_engine
+engine/v*_tuner
+engine/v*_baseline
 *.o
 mse_curve.png
 
@@ -27,6 +27,6 @@ data/
 .claude/
 
 # Lichess bot logs & runtime
-lichess-bot-master/lichess_bot_auto_logs/
-lichess-bot-master/venv/
+bot/lichess_bot_auto_logs/
+bot/venv/
 *.log
