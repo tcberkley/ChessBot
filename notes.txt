@@ -1,6 +1,6 @@
 Lichess Bot Setup:
     - Account: tombot1234
-    - Engine: v24_engine (UCI protocol, Texel-tuned)
+    - Engine: v26_engine (UCI protocol, Texel-tuned, Syzygy WDL, LMR improvements)
     - Config: lichess-bot-master/config.yml (gitignored)
     - Bridge: lichess-bot-master/ (Python, lichess-bot library)
     - Server: Hetzner CPX11, root@178.156.243.29, Ubuntu 24.04
@@ -315,6 +315,36 @@ Bot Version History:
                        pos3 d6=11030083, CMK d3=62379.
                        Source: c_rewrite/v19_engine.c
                        Binary: c_rewrite/v19_engine (compiled with gcc -O3 -march=native -pthread)
+
+    v26 - v25 + search improvements: history-based quiet pruning (depth≤3,
+                       history < −2048*depth → skip quiet move; saves nodes on clearly
+                       bad moves), improving flag in LMR (reduction += !improving when
+                       eval stagnating — complements its use in null move R and LMP),
+                       continuation history in LMR (reduction -= cont_hist/16384,
+                       using the already-computed 1-ply cont_hist for finer LMR control).
+                       Also inherited from prior v26: IIR (non-PV, no TT move, depth≥4
+                       → depth−1), razoring margin 450 (was 300), SE margin 8*depth
+                       (was 25*depth), double extension (se_score < se_beta−50 → extend 2),
+                       phase-aware futility (fm * (4+game_phase)/16 when phase<12).
+                       Rejected this session: narrower aspiration 50→25 (45%), pawn
+                       correction history (46%).
+                       Tournament (50 games, movetime 100ms): 54% vs v25_baseline (~+28 Elo).
+                       Perft: startpos d5=4865609.
+                       Source: c_rewrite/v26_engine.c
+                       Deployed: Hetzner CPX11 server.
+
+    v25 - v24 + Syzygy WDL tablebase probing (fathom library). WDL probe in
+                       negamax at interior nodes (ply>0, !in_check, pieces≤TB_LARGEST)
+                       converts TB result to score. Root TB probe at search start:
+                       on TB_WIN outputs bestmove instantly with DTZ score. UCI option
+                       SyzygyPath. Mate-in-X chat: engine_wrapper.py detects mate score
+                       in info, sends "Mate in X!" once per game via Lichess chat API.
+                       Improving flag: raw_eval > static_evals_by_ply[ply-2] → used in
+                       null move R (+1) and LMP threshold (+3 quiets allowed).
+                       Syzygy tables: ~/syzygy on server (145 .rtbw + 145 .rtbz, ~680MB).
+                       Perft: startpos d5=4865609.
+                       Source: c_rewrite/v25_engine.c
+                       Deployed: Hetzner CPX11 server.
 
     v24 - v23 + 4 MSE-tested eval improvements. King area threats as tunable
                        8-entry array (replaces quadratic penalty=danger^2/4, init {0,0,1,4,10,20,36,56},

@@ -4642,6 +4642,12 @@ static inline int negamax(int alpha, int beta, int depth, int null_ok)
             && legal_moves_count > 0 && quiets_tried >= lmp_threshold[depth] + improving * 3)
             continue;
 
+        // v27: History-based quiet pruning — skip clearly bad quiet moves at low depth
+        if (!pv_node && !in_check && depth <= 3 && !is_capture && !is_promotion
+            && move != killer_moves[0][ply] && move != killer_moves[1][ply]
+            && history_moves[get_move_piece(move)][get_move_target(move)] < -2048 * depth)
+            continue;
+
         copy_board();
         ply++;
         repetition_index++;
@@ -4673,9 +4679,14 @@ static inline int negamax(int alpha, int beta, int depth, int null_ok)
             if (legal_moves_count >= 4 && depth >= 3 && !in_check && !is_capture && !is_promotion) {
                 int idx = legal_moves_count < 64 ? legal_moves_count : 63;
                 reduction = lmr_table[depth < 64 ? depth : 63][idx];
+                // v27: Reduce more when not improving (eval stagnating)
+                reduction += !improving;
                 // v19: History-adjusted LMR — reduce less for moves with strong history score
                 int hist = history_moves[get_move_piece(move)][get_move_target(move)];
                 reduction -= hist / 8192;
+                // v27: Continuation history adjustment in LMR
+                if (cm_piece)
+                    reduction -= cont_hist[cm_piece][cm_to][get_move_piece(move)][get_move_target(move)] / 16384;
                 if (reduction < 0) reduction = 0;
                 if (reduction > depth - 2) reduction = depth - 2;
                 // Don't reduce if move gives check
