@@ -63,9 +63,12 @@ class Engine:
             if token in line:
                 return lines
 
-    def get_move(self, fen, depth):
+    def get_move(self, fen, depth, movetime=0):
         self._send(f"position fen {fen}")
-        self._send(f"go depth {depth}")
+        if movetime > 0:
+            self._send(f"go movetime {movetime}")
+        else:
+            self._send(f"go depth {depth}")
         lines = self._read_until("bestmove")
         for line in lines:
             if line.startswith("bestmove"):
@@ -106,7 +109,7 @@ def generate_opening(plies, rng):
 
 # ── Single game ───────────────────────────────────────────────────────────────
 
-def play_game(white_engine, black_engine, start_fen, depth, max_moves):
+def play_game(white_engine, black_engine, start_fen, depth, max_moves, movetime=0):
     """
     Play one game from start_fen.
     Returns: 1.0 (white wins), 0.5 (draw), 0.0 (black wins)
@@ -117,7 +120,7 @@ def play_game(white_engine, black_engine, start_fen, depth, max_moves):
         if board.is_game_over(claim_draw=True):
             break
         engine = white_engine if board.turn == chess.WHITE else black_engine
-        move_uci = engine.get_move(board.fen(), depth)
+        move_uci = engine.get_move(board.fen(), depth, movetime)
         if move_uci is None:
             break
         try:
@@ -148,6 +151,8 @@ def main():
     parser.add_argument("--benchmark",     action="store_true")
     parser.add_argument("--seed",          type=int,   default=42)
     parser.add_argument("--hours",         type=float, default=7.5)
+    parser.add_argument("--movetime",      type=int,   default=0,
+                        help="ms per move (overrides --depth if set)")
     parser.add_argument("--engine1",       type=str,   default="./v22_engine",
                         help="Path to engine 1 (new/test)")
     parser.add_argument("--engine2",       type=str,   default="./v21_engine",
@@ -166,7 +171,8 @@ def main():
     v21 = Engine(e2_path, e2_name)
     print(f"  engine1 ({e1_name}): {e1_path}", flush=True)
     print(f"  engine2 ({e2_name}): {e2_path}", flush=True)
-    print(f"  Depth: {args.depth}  Max half-moves: {args.moves}  Opening plies: {args.plies}", flush=True)
+    tc_str = f"movetime {args.movetime}ms" if args.movetime > 0 else f"depth {args.depth}"
+    print(f"  TC: {tc_str}  Max half-moves: {args.moves}  Opening plies: {args.plies}", flush=True)
 
     # ── Benchmark: time 2 games, report and exit ──────────────────────────────
     if args.benchmark:
@@ -175,9 +181,9 @@ def main():
         print(f"  Opening FEN: {fen}", flush=True)
 
         t0 = time.time()
-        r1 = play_game(v22, v21, fen, args.depth, args.moves)
+        r1 = play_game(v22, v21, fen, args.depth, args.moves, args.movetime)
         v22.new_game(); v21.new_game()
-        r2 = play_game(v21, v22, fen, args.depth, args.moves)
+        r2 = play_game(v21, v22, fen, args.depth, args.moves, args.movetime)
         elapsed = time.time() - t0
 
         v22.quit(); v21.quit()
@@ -196,9 +202,9 @@ def main():
         print("\nAuto-timing: running 1 opening pair to estimate speed...", flush=True)
         fen = generate_opening(args.plies, rng)
         t0 = time.time()
-        play_game(v22, v21, fen, args.depth, args.moves)
+        play_game(v22, v21, fen, args.depth, args.moves, args.movetime)
         v22.new_game(); v21.new_game()
-        play_game(v21, v22, fen, args.depth, args.moves)
+        play_game(v21, v22, fen, args.depth, args.moves, args.movetime)
         secs_per_pair = time.time() - t0
         args.openings = max(1, int(args.hours * 3600 / secs_per_pair * 0.92))
         print(f"  {secs_per_pair:.1f}s per opening pair → {args.openings} openings for {args.hours}h", flush=True)
@@ -211,7 +217,7 @@ def main():
     # ── Tournament ────────────────────────────────────────────────────────────
     print(f"\n{'='*65}", flush=True)
     print(f"  {e1_name} vs {e2_name} — {args.openings} openings × 2 colors = {args.openings*2} games", flush=True)
-    print(f"  Depth: {args.depth}   Opening plies: {args.plies}", flush=True)
+    print(f"  TC: {tc_str}   Opening plies: {args.plies}", flush=True)
     print(f"{'='*65}", flush=True)
     print(f"{'Game':>5}  {'Opening':>7}  {e1_name+' Color':>12}  {'Result':>8}  "
           f"{e1_name+' Score':>12}  {'W':>4} {'D':>4} {'L':>4}  Elapsed", flush=True)
@@ -232,7 +238,7 @@ def main():
                 white_e, black_e = v21, v22
                 color_str = "Black"
 
-            result_white = play_game(white_e, black_e, fen, args.depth, args.moves)
+            result_white = play_game(white_e, black_e, fen, args.depth, args.moves, args.movetime)
 
             # Score from v22's perspective
             if v22_is_white:

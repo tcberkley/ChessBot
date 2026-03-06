@@ -15,13 +15,11 @@ from lib.challenge_logger import log_challenge, format_tc
 
 NOBOT_BLOCK_FILE = "/root/scripts/nobot_block.txt"
 MULTIPROCESSING_LIST_TYPE = Sequence[model.Challenge]
-DAILY_TIMERS_TYPE = list[Timer]
 LICHESS_TYPE = Union[lichess.Lichess, test_bot.lichess.Lichess]
 
 logger = logging.getLogger(__name__)
 
-daily_challenges_file_name = "daily_challenge_times.txt"
-daily_games_file_name = "daily_game_times.txt"
+daily_window_file_name = "daily_window.txt"
 timestamp_format = "%Y-%m-%d %H:%M:%S\n"
 
 DAILY_CHALLENGE_LIMIT = 250
@@ -30,43 +28,28 @@ NEAR_LIMIT_THRESHOLD = 0.95
 RAPID_FALLBACK_TCS = [(600, 0), (600, 5), (900, 0), (900, 10)]  # (base_time, increment): 10+0, 10+5, 15+0, 15+10
 
 
-def read_daily_challenges() -> DAILY_TIMERS_TYPE:
-    """Read the challenges we have created in the past 24 hours from a text file."""
-    timers: DAILY_TIMERS_TYPE = []
+def read_daily_window() -> tuple[Optional[Timer], int, int]:
+    """Read the current fixed 24h challenge window from disk. Returns (window_timer, challenge_count, game_count)."""
     try:
-        with open(daily_challenges_file_name) as file:
-            for line in file:
-                timers.append(Timer(days(1), datetime.datetime.strptime(line, timestamp_format)))
-    except FileNotFoundError:
+        with open(daily_window_file_name) as file:
+            lines = file.readlines()
+            if len(lines) >= 3:
+                window_start = Timer(days(1), datetime.datetime.strptime(lines[0], timestamp_format))
+                if not window_start.is_expired():
+                    return window_start, int(lines[1].strip()), int(lines[2].strip())
+    except (FileNotFoundError, ValueError):
         pass
-
-    return [timer for timer in timers if not timer.is_expired()]
-
-
-def write_daily_challenges(daily_challenges: DAILY_TIMERS_TYPE) -> None:
-    """Write the challenges we have created in the past 24 hours to a text file."""
-    with open(daily_challenges_file_name, "w") as file:
-        for timer in daily_challenges:
-            file.write(timer.starting_timestamp(timestamp_format))
+    return None, 0, 0
 
 
-def read_daily_games() -> DAILY_TIMERS_TYPE:
-    """Read the games played in the past 24 hours from a text file."""
-    timers: DAILY_TIMERS_TYPE = []
-    try:
-        with open(daily_games_file_name) as file:
-            for line in file:
-                timers.append(Timer(days(1), datetime.datetime.strptime(line, timestamp_format)))
-    except FileNotFoundError:
-        pass
-    return [timer for timer in timers if not timer.is_expired()]
-
-
-def write_daily_games(daily_games: DAILY_TIMERS_TYPE) -> None:
-    """Write the games played in the past 24 hours to a text file."""
-    with open(daily_games_file_name, "w") as file:
-        for timer in daily_games:
-            file.write(timer.starting_timestamp(timestamp_format))
+def write_daily_window(window_start: Optional[Timer], challenge_count: int, game_count: int) -> None:
+    """Persist the current challenge window to disk."""
+    if window_start is None:
+        return
+    with open(daily_window_file_name, "w") as file:
+        file.write(window_start.starting_timestamp(timestamp_format))
+        file.write(f"{challenge_count}\n")
+        file.write(f"{game_count}\n")
 
 
 class Matchmaking:
@@ -86,8 +69,7 @@ class Matchmaking:
         # Maximum time between challenges, even if there are active games
         self.max_wait_time = minutes(10) if self.matchmaking_cfg.allow_during_games else years(10)
         self.challenge_id = ""
-        self.daily_challenges = read_daily_challenges()
-        self.daily_games = read_daily_games()
+        self.window_start, self.window_challenge_count, self.window_game_count = read_daily_window()
 
         # (opponent name, game aspect) --> other bot is likely to accept challenge
         # game aspect is the one the challenged bot objects to and is one of:
@@ -170,25 +152,29 @@ class Matchmaking:
 
     def update_daily_challenge_record(self) -> None:
         """
-        Record timestamp of latest challenge and update minimum wait time.
+        Record latest challenge in the fixed 24h window and update minimum wait time.
 
-        As the number of challenges in a day increase, the minimum wait time between challenges increases.
+        The window starts on the first challenge sent and resets 24h later (matching Lichess's fixed window).
+        As the number of challenges in a window increase, the minimum wait time between challenges increases.
         0   -  49 challenges --> 1 minute
         50  -  99 challenges --> 2 minutes
         100 - 149 challenges --> 3 minutes
         etc.
         """
-        self.daily_challenges = [timer for timer in self.daily_challenges if not timer.is_expired()]
-        self.daily_challenges.append(Timer(days(1)))
-        self.min_wait_time = seconds(60) * ((len(self.daily_challenges) // 50) + 1)
-        write_daily_challenges(self.daily_challenges)
+        if self.window_start is None or self.window_start.is_expired():
+            self.window_start = Timer(days(1))
+            self.window_challenge_count = 0
+            self.window_game_count = 0
+        self.window_challenge_count += 1
+        self.min_wait_time = seconds(60) * ((self.window_challenge_count // 50) + 1)
+        write_daily_window(self.window_start, self.window_challenge_count, self.window_game_count)
 
     def is_near_daily_limit(self) -> bool:
         """Return True if >= 95% of either the daily challenge-send or daily game limit is used."""
-        challenge_count = len([t for t in self.daily_challenges if not t.is_expired()])
-        game_count = len([t for t in self.daily_games if not t.is_expired()])
-        return (challenge_count >= int(DAILY_CHALLENGE_LIMIT * NEAR_LIMIT_THRESHOLD)
-                or game_count >= int(DAILY_GAME_LIMIT * NEAR_LIMIT_THRESHOLD))
+        if self.window_start is None or self.window_start.is_expired():
+            return False
+        return (self.window_challenge_count >= int(DAILY_CHALLENGE_LIMIT * NEAR_LIMIT_THRESHOLD)
+                or self.window_game_count >= int(DAILY_GAME_LIMIT * NEAR_LIMIT_THRESHOLD))
 
     def perf(self) -> dict[str, PerfType]:
         """Get the bot's rating in every variant. Bullet, blitz, rapid etc. are considered different variants."""
@@ -255,8 +241,8 @@ class Matchmaking:
         rating_preference = match_config.rating_preference
 
         if self.is_near_daily_limit():
-            logger.info(f"Near daily limit ({len(self.daily_challenges)} challenges, "
-                        f"{len(self.daily_games)} games) — switching to rapid time controls.")
+            logger.info(f"Near daily limit ({self.window_challenge_count} challenges, "
+                        f"{self.window_game_count} games) — switching to rapid time controls.")
             base_time, increment = random.choice(RAPID_FALLBACK_TCS)
             days = 0
         else:
@@ -368,10 +354,10 @@ class Matchmaking:
                   base_time: int = 0, increment: int = 0, days: int = 0, mode: str = "rated",
                   opponent_rating: int = 0, my_rating: int = 0) -> None:
         """Challenge as soon as min_wait_time passes after a game ends."""
-        # Track daily completed games for rate-limit awareness
-        self.daily_games = [t for t in self.daily_games if not t.is_expired()]
-        self.daily_games.append(Timer(seconds(86400)))
-        write_daily_games(self.daily_games)
+        # Track completed games in the current fixed window for rate-limit awareness
+        if self.window_start is not None and not self.window_start.is_expired():
+            self.window_game_count += 1
+            write_daily_window(self.window_start, self.window_challenge_count, self.window_game_count)
         upset_win = won and opponent_rating > my_rating > 0
         if won and opponent and opponent != self.last_rematched_opponent and upset_win:
             logger.info(f"Won against higher-rated {opponent} ({opponent_rating} vs {my_rating}) — queuing rematch.")
@@ -392,9 +378,9 @@ class Matchmaking:
             time_to_next_challenge = self.min_wait_time - self.last_challenge_created_delay.time_since_reset()
             time_left = max(postgame_timeout, time_to_next_challenge)
             earliest_challenge_time = datetime.datetime.now() + time_left
-            challenges = "challenge" + ("" if len(self.daily_challenges) == 1 else "s")
+            challenges = "challenge" + ("" if self.window_challenge_count == 1 else "s")
             logger.info(f"Next challenge will be created after {earliest_challenge_time.strftime('%X')} "
-                        f"({len(self.daily_challenges)} {challenges} in last 24 hours)")
+                        f"({self.window_challenge_count} {challenges} in current 24h window)")
 
     def add_to_block_list(self, username: str) -> None:
         """Add a bot to the blocklist."""

@@ -1,5 +1,6 @@
 """Provides communication with the engine."""
 from __future__ import annotations
+import json
 import os
 import chess.engine
 import chess.polyglot
@@ -213,6 +214,7 @@ class EngineWrapper:
 
         self.add_comment(best_move, board)
         self.print_stats()
+        self.log_move_stats(game.id, len(board.move_stack))
         if best_move.resigned and len(board.move_stack) >= 2:
             li.resign(game.id)
         else:
@@ -347,6 +349,34 @@ class EngineWrapper:
         """Print the engine stats."""
         for line in self.get_stats():
             logger.info(line)
+
+    def log_move_stats(self, game_id: str, move_num: int) -> None:
+        """Append per-move engine stats to game_stats.jsonl for dashboard analytics."""
+        info = self.move_commentary[-1] if self.move_commentary else {}
+        score = info.get("score")
+        source = next(
+            (str(v).split(":", 1)[1] for k, v in info.items()
+             if k == "string" and isinstance(v, str) and "lichess-bot-source:" in v),
+            "engine"
+        )
+        entry = {
+            "ts": datetime.datetime.now().isoformat(),
+            "game_id": game_id,
+            "move": move_num,
+            "depth": info.get("depth"),
+            "nodes": info.get("nodes"),
+            "nps": info.get("nps"),
+            "cp": score.relative.score() if score else None,
+            "mate": score.relative.mate() if score else None,
+            "tbhits": info.get("tbhits"),
+            "time_ms": info.get("time"),
+            "source": source,
+        }
+        try:
+            with open("/root/lichess-bot-master/game_stats.jsonl", "a") as f:
+                f.write(json.dumps(entry) + "\n")
+        except Exception:
+            pass
 
     def readable_score(self, relative_score: chess.engine.PovScore) -> str:
         """Convert the score to a more human-readable format."""

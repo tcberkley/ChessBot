@@ -79,8 +79,24 @@ class Conversation:
             name = self.game.me.name
             self.send_reply(line, f"{name} running {self.engine.name()} (lichess-bot v{self.version})")
         elif is_eval and (from_self or line.room == "spectator"):
-            stats = self.engine.get_stats(for_chat=True)
-            self.send_reply(line, ", ".join(stats))
+            info = self.engine.move_commentary[-1] if self.engine.move_commentary else {}
+            pov_score = info.get("score")
+            if pov_score is None:
+                self.send_reply(line, "No eval yet.")
+            else:
+                score = pov_score.relative
+                mate = score.mate()
+                cp = score.score()
+                me = self.game.me.name
+                opp = self.game.opponent.name
+                if mate is not None:
+                    winner = me if mate > 0 else opp
+                    self.send_reply(line, f"{winner} has mate in {abs(mate)}!")
+                elif cp is not None and abs(cp) > 30:
+                    winner = me if cp > 0 else opp
+                    self.send_reply(line, f"{winner} is winning (+{abs(cp) / 100:.1f})")
+                else:
+                    self.send_reply(line, f"Position is equal ({(cp or 0) / 100:+.2f})")
         elif is_eval:
             self.send_reply(line, "I don't tell that to my opponent, sorry.")
         elif cmd == "depth":
