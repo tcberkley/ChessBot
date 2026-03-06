@@ -4688,7 +4688,7 @@ static inline int negamax(int alpha, int beta, int depth, int null_ok)
                 if (cm_piece)
                     reduction -= cont_hist[cm_piece][cm_to][get_move_piece(move)][get_move_target(move)] / 16384;
                 if (reduction < 0) reduction = 0;
-                if (reduction > depth - 2) reduction = depth - 2;
+                if (reduction > depth - 1) reduction = depth - 1;
                 // Don't reduce if move gives check
                 if (is_in_check()) reduction = 0;
             }

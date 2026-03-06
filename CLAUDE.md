@@ -127,7 +127,7 @@ Compile flags: `-O3 -march=native -fomit-frame-pointer -pthread`
 | Feature | Value |
 |---------|-------|
 | Null move R | `3 + depth/6 + (!improving)` |
-| LMR | table-based, `reduction -= hist/8192` |
+| LMR | table-based, `reduction -= hist/8192`, cap at `depth−1` |
 | LMP thresholds | `{0, 5, 10, 18}` + `improving*3` |
 | Razoring | depth==1, margin=450 |
 | IIR | non-PV, no TT move, depth≥4 → depth−1 |
@@ -173,7 +173,7 @@ Compile flags: `-O3 -march=native -fomit-frame-pointer -pthread`
 | v24 | King area threats, rank-indexed passed pawn tables, inner/outer mobility, minor→heavy attack bonus; full Texel retune 781 params |
 | v25 | Syzygy WDL probing (fathom), root TB probe, mate-in-X chat, improving flag |
 | v26 | IIR, razoring 450, SE margin 8×depth, double extension, phase-aware futility |
-| v27 | Symmetric history malus (depth² vs depth²/2) + continuation history malus |
+| v27 | Symmetric history malus (depth² vs depth²/2) + continuation history malus + LMR cap depth−1 (56%) |
 
 ---
 
