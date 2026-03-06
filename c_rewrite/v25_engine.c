@@ -4481,7 +4481,7 @@ static inline int negamax(int alpha, int beta, int depth, int null_ok)
 
         // v19: Razoring — at depth 1, if even with a generous margin we can't beat alpha,
         // fall straight into quiescence rather than wasting time on quiet moves
-        if (depth == 1 && static_eval + 300 <= alpha)
+        if (depth == 1 && static_eval + 450 <= alpha)
             return quiescence(alpha, beta);
     }
 
@@ -4491,6 +4491,10 @@ static inline int negamax(int alpha, int beta, int depth, int null_ok)
         read_hash_entry(alpha, beta, depth, &tt_best_move);
         if (!is_tt_move_valid(tt_best_move)) tt_best_move = 0;
     }
+
+    // IIR: at non-PV nodes with no TT move, depth >= 4, reduce by 1
+    if (!pv_node && !tt_best_move && depth >= 4)
+        depth -= 1;
 
     // Save opponent's last move for countermove heuristic lookup/storage
     int cm_piece = prev_move_piece;

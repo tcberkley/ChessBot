@@ -3966,6 +3966,7 @@ int countermove[12][64];
 // Previous move tracking for countermove (piece that moved and its destination)
 __thread int prev_move_piece;
 __thread int prev_move_to;
+__thread int prev_was_capture;
 
 // Static eval history per ply for improving flag
 __thread int static_evals_by_ply[max_ply];
@@ -4163,26 +4164,22 @@ static inline int score_move(int move, int tt_move)
     }
 }
 
-// Sort moves by score (selection sort for simplicity)
-static inline void sort_moves(moves *move_list, int tt_move)
+// Score all moves into caller-supplied array (lazy sort phase 1)
+static inline void score_moves(moves *move_list, int *move_scores, int tt_move)
 {
-    int move_scores[256];
     for (int i = 0; i < move_list->count; i++)
         move_scores[i] = score_move(move_list->moves[i], tt_move);
+}
 
-    for (int i = 0; i < move_list->count; i++) {
-        for (int j = i + 1; j < move_list->count; j++) {
-            if (move_scores[i] < move_scores[j]) {
-                // Swap scores
-                int tmp = move_scores[i];
-                move_scores[i] = move_scores[j];
-                move_scores[j] = tmp;
-                // Swap moves
-                tmp = move_list->moves[i];
-                move_list->moves[i] = move_list->moves[j];
-                move_list->moves[j] = tmp;
-            }
-        }
+// Swap the best remaining move into position `start` (lazy sort phase 2, called per iteration)
+static inline void pick_best_move(moves *move_list, int *move_scores, int start)
+{
+    int best = start;
+    for (int j = start + 1; j < move_list->count; j++)
+        if (move_scores[j] > move_scores[best]) best = j;
+    if (best != start) {
+        int tmp = move_scores[start]; move_scores[start] = move_scores[best]; move_scores[best] = tmp;
+        tmp = move_list->moves[start]; move_list->moves[start] = move_list->moves[best]; move_list->moves[best] = tmp;
     }
 }
 
@@ -4222,9 +4219,11 @@ static inline int quiescence(int alpha, int beta)
     // Generate all moves, filter to captures only
     moves move_list[1];
     generate_moves(move_list);
-    sort_moves(move_list, 0);
+    int move_scores[256];
+    score_moves(move_list, move_scores, 0);
 
     for (int count = 0; count < move_list->count; count++) {
+        pick_best_move(move_list, move_scores, count);
         int move = move_list->moves[count];
 
         // Skip non-captures (captures sorted first, so break when we hit a quiet)
@@ -4477,13 +4476,16 @@ static inline int negamax(int alpha, int beta, int depth, int null_ok)
 
         // Forward futility pruning: if eval + margin <= alpha, quiet moves won't help
         if (depth <= 2 && alpha > -mate_score && alpha < mate_score) {
-            if (static_eval + futility_margins[depth] <= alpha)
+            int fm = futility_margins[depth];
+            // Narrower margins in endgame (game_phase 0=EG, 24=MG)
+            if (game_phase < 12) fm = fm * (4 + game_phase) / 16;
+            if (static_eval + fm <= alpha)
                 futile = 1;
         }
 
         // v19: Razoring — at depth 1, if even with a generous margin we can't beat alpha,
         // fall straight into quiescence rather than wasting time on quiet moves
-        if (depth == 1 && static_eval + 300 <= alpha)
+        if (depth == 1 && static_eval + 450 <= alpha)
             return quiescence(alpha, beta);
     }
 
@@ -4494,9 +4496,14 @@ static inline int negamax(int alpha, int beta, int depth, int null_ok)
         if (!is_tt_move_valid(tt_best_move)) tt_best_move = 0;
     }
 
+    // IIR: at non-PV nodes with no TT move, depth >= 4, reduce by 1
+    if (!pv_node && !tt_best_move && depth >= 4)
+        depth -= 1;
+
     // Save opponent's last move for countermove heuristic lookup/storage
     int cm_piece = prev_move_piece;
     int cm_to = prev_move_to;
+    int cm_was_cap = prev_was_capture;
 
     // v18: Singular extension — if the TT move is the only good move at this node, extend it.
     // Conditions: non-PV, depth>=8, have a TT move, not in check, not at root,
@@ -4509,11 +4516,13 @@ static inline int negamax(int alpha, int beta, int depth, int null_ok)
             && se_tt_depth >= depth - 3
             && (se_tt_flag == HASH_FLAG_EXACT || se_tt_flag == HASH_FLAG_BETA)
             && se_tt_score > -mate_score && se_tt_score < mate_score) {
-            int se_beta = se_tt_score - 25 * depth;
+            int se_beta = se_tt_score - 8 * depth;
             se_excluded_move = tt_best_move;
             int se_score = negamax(se_beta - 1, se_beta, depth / 2, 0);
             se_excluded_move = 0;
-            if (!v14_stopped && se_score < se_beta)
+            if (!v14_stopped && se_score < se_beta - 50)
+                se_extension = 2;  // double extension: position is clearly singular
+            else if (!v14_stopped && se_score < se_beta)
                 se_extension = 1;
         }
     }
@@ -4537,7 +4546,7 @@ static inline int negamax(int alpha, int beta, int depth, int null_ok)
             legal_moves_count = 1;
             int futile_tt = futile && legal_moves_count > 0 &&
                             !get_move_capture(tt_best_move) && !get_move_promoted(tt_best_move);
-            int tt_score;
+                int tt_score;
             if (!futile_tt) {
                 tt_score = -negamax(-beta, -alpha, depth - 1 + se_extension, 1);
             } else {
@@ -4594,16 +4603,18 @@ static inline int negamax(int alpha, int beta, int depth, int null_ok)
         prev_move_to    = cm_to;
     }
 
-    // Generate and sort remaining moves
+    // Generate and sort remaining moves (lazy: score upfront, pick-best per iteration)
     moves move_list[1];
     generate_moves(move_list);
-    sort_moves(move_list, tt_best_move);
+    int move_scores[256];
+    score_moves(move_list, move_scores, tt_best_move);
 
     // v19: LMP threshold — quiet moves tried before pruning (indexed by depth)
     static const int lmp_threshold[4] = {0, 5, 10, 18};
     int quiets_tried = 0;
 
     for (int count = 0; count < move_list->count; count++) {
+        pick_best_move(move_list, move_scores, count);
         int move = move_list->moves[count];
         if (move == tt_best_move) continue;       // already tried in pre-try stage
         if (move == se_excluded_move) continue;   // excluded from SE verification search
@@ -4960,6 +4971,32 @@ void search_position(int max_depth, int time_budget_ms)
         // TB_DRAW / TB_LOSS / probe failed: fall through to normal alpha-beta
     }
 #endif
+
+    // Forced move: if only one legal move exists, play it instantly without searching.
+    if (!is_pondering) {
+        moves root_moves[1];
+        generate_moves(root_moves);
+        int legal_count = 0, only_move = 0;
+        for (int i = 0; i < root_moves->count && legal_count <= 1; i++) {
+            { // nested block required: copy_board() declares locals
+                copy_board();
+                if (make_move(root_moves->moves[i], all_moves)) {
+                    take_back();
+                    legal_count++;
+                    only_move = root_moves->moves[i];
+                }
+            }
+        }
+        if (legal_count == 1) {
+            printf("info depth 1 score cp 0 time 0 nodes 1 pv ");
+            print_move(only_move);
+            printf("\nbestmove ");
+            print_move(only_move);
+            printf("\n");
+            fflush(stdout);
+            return;
+        }
+    }
 
     // Save board state for worker threads and spawn them
     pthread_t worker_threads[MAX_THREADS];
