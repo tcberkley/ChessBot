@@ -10,7 +10,7 @@ Do NOT read, write, or execute anything outside this tree without explicit user 
 - **Lichess bot**: `tombot1234` on Hetzner CPX11 (`178.156.243.29`, Ubuntu 24.04)
 - **Engine**: C (BBC magic bitboard), UCI, multi-threaded (Lazy SMP + pondering)
 - **Bridge**: Python `lichess-bot` in `bot/`
-- **Current deployed**: `v28_engine`
+- **Current deployed**: `v27_engine`
 - **Engine source**: `engine/` | **Fathom Syzygy lib**: `engine/fathom*.{h,c}` + `tbconfig.h` `tbchess.c` `stdendian.h`
 
 ---
@@ -77,8 +77,7 @@ python3 tournament_v22.py --engine1 ./vTest_engine --engine2 ./v25_baseline \
 |--------|--------|-------|
 | `vTest_engine` | `vTest_engine.c fathom.c` | Working test file — modify freely |
 | `v26_engine` | `v26_engine.c fathom.c` | Previous version |
-| `v27_engine` | `v27_engine.c fathom.c` | Previous version |
-| `v28_engine` | `v28_engine.c fathom.c` | Current deployed version |
+| `v27_engine` | `v27_engine.c fathom.c` | Current deployed version |
 | `vTest_tuner` | `vTest_engine.c` | `-DTUNER`, no fathom |
 | `v26_tuner` | `v26_engine.c fathom.c` | `-DTUNER` |
 
@@ -155,6 +154,7 @@ Compile flags: `-O3 -march=native -fomit-frame-pointer -pthread`
 | Capture pruning | 47.5% | Reverted v26 (old) session |
 | SEE-weighted capture history | 44.0% | Winning SEE→bonus, losing SEE→malus; clear regression vs v27 |
 | Aspiration window time guard (0.7→0.5) | 45.0% | Guard already existed at 0.7; tightening to 0.5 hurts (bails too early) |
+| King virtual mobility (middlegame, 5cp/missing square) | 44.0% | (8−mob)×5 penalty in MG king safety; not discriminating enough vs v28 |
 
 ---
 
@@ -176,8 +176,7 @@ Compile flags: `-O3 -march=native -fomit-frame-pointer -pthread`
 | v24 | King area threats, rank-indexed passed pawn tables, inner/outer mobility, minor→heavy attack bonus; full Texel retune 781 params |
 | v25 | Syzygy WDL probing (fathom), root TB probe, mate-in-X chat, improving flag |
 | v26 | IIR, razoring 450, SE margin 8×depth, double extension, phase-aware futility |
-| v27 | Symmetric history malus (depth² vs depth²/2) + continuation history malus + LMR cap depth−1 (56%) |
-| v28 | Pawn threat bonus scaled by target piece value: N/B=30cp, R=50cp, Q=90cp (was flat 35cp) (57%) |
+| v27 | Symmetric history malus + cont_hist malus + LMR cap depth−1 + pawn threat scaled by piece value (N/B=30, R=50, Q=90cp) |
 
 ---
 

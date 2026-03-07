@@ -3599,7 +3599,15 @@ static inline int evaluate_side(int color, int phase, int pawn_score_in, U64 own
                 pop_bit(epb, esq);
             }
             U64 undefended = attacked & ~ep_atk;
-            score += count_bits(undefended) * TP_THREAT_ATK;
+            while (undefended) {
+                int sq = get_ls1b_index(undefended);
+                int pval = 0;
+                if (get_bit(bitboards[en], sq) || get_bit(bitboards[eb], sq)) pval = 300;
+                else if (get_bit(bitboards[er], sq)) pval = 500;
+                else if (get_bit(bitboards[eq], sq)) pval = 900;
+                score += pval / 10;  // N/B=30, R=50, Q=90 cp per threat
+                pop_bit(undefended, sq);
+            }
         }
     }
 

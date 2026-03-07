@@ -3,7 +3,7 @@ CFLAGS = -O3 -Wall -Wno-unused-variable -Wno-unused-function
 V14FLAGS = -O3 -march=native -fomit-frame-pointer -Wall -Wno-unused-variable -Wno-unused-function
 LDFLAGS = -lm
 
-all: v13_engine v14_engine v15_engine v16_engine v17_engine v18_engine v19_engine v20_engine v20_tuner v21_engine v22_engine v23_engine v24_engine v25_engine v26_engine v27_engine v28_engine
+all: v13_engine v14_engine v15_engine v16_engine v17_engine v18_engine v19_engine v20_engine v20_tuner v21_engine v22_engine v23_engine v24_engine v25_engine v26_engine v27_engine
 
 v13_engine: v13_engine.c
 	$(CC) $(CFLAGS) -o v13_engine v13_engine.c $(LDFLAGS)
@@ -71,12 +71,6 @@ v27_engine: v27_engine.c fathom.c
 v27_tuner: v27_engine.c fathom.c
 	$(CC) $(V14FLAGS) -DTUNER -o v27_tuner v27_engine.c fathom.c -lm
 
-v28_engine: v28_engine.c fathom.c
-	$(CC) $(V14FLAGS) -pthread -o v28_engine v28_engine.c fathom.c $(LDFLAGS)
-
-v28_tuner: v28_engine.c fathom.c
-	$(CC) $(V14FLAGS) -DTUNER -o v28_tuner v28_engine.c fathom.c -lm
-
 vTest_engine: vTest_engine.c fathom.c
 	$(CC) $(V14FLAGS) -pthread -o vTest_engine vTest_engine.c fathom.c $(LDFLAGS)
 
@@ -84,6 +78,6 @@ vTest_tuner: vTest_engine.c
 	$(CC) $(V14FLAGS) -DTUNER -o vTest_tuner vTest_engine.c -lm
 
 clean:
-	rm -f v13_engine v14_engine v15_engine v16_engine v17_engine v18_engine v19_engine v20_engine v20_tuner v21_engine v22_engine v22_tuner v23_engine v23_tuner v24_engine v24_tuner v25_engine v25_tuner v26_engine v26_tuner v27_engine v27_tuner v28_engine v28_tuner vTest_engine vTest_tuner
+	rm -f v13_engine v14_engine v15_engine v16_engine v17_engine v18_engine v19_engine v20_engine v20_tuner v21_engine v22_engine v22_tuner v23_engine v23_tuner v24_engine v24_tuner v25_engine v25_tuner v26_engine v26_tuner v27_engine v27_tuner vTest_engine vTest_tuner
 
 .PHONY: all clean
