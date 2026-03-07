@@ -2785,7 +2785,7 @@ const int v14_piece_values[12] = {
 // The UCI engine reads from tp[] normally. The tuner binary (compiled with -DTUNER)
 // modifies tp[] in place during coordinate descent and writes optimized values on exit.
 
-#define TP_COUNT 781
+#define TP_COUNT 788
 
 // PST accessor macros (indices into tp[])
 #define TP_PST_PAWN_MG(i)   tp[0   + (i)]
@@ -2846,6 +2846,13 @@ const int v14_piece_values[12] = {
 #define TP_EG_ROOK_PAWN   tp[746]   // Endgame scaling: lone rook per-pawn addition
 #define TP_EG_KING_PAWN   tp[747]   // endgame king proximity to enemy pawns
 #define TP_MINOR_THREAT      tp[780]   // minor piece attacks undefended enemy heavy pieces
+#define TP_THREAT_R          tp[781]   // pawn threatens undefended enemy rook
+#define TP_THREAT_Q          tp[782]   // pawn threatens undefended enemy queen
+#define TP_KDANGER_PAWN      tp[783]   // king danger weight: enemy pawn attacks king zone
+#define TP_KDANGER_KNIGHT    tp[784]   // king danger weight: enemy knight attacks king zone
+#define TP_KDANGER_BISHOP    tp[785]   // king danger weight: enemy bishop attacks king zone
+#define TP_KDANGER_ROOK      tp[786]   // king danger weight: enemy rook attacks king zone
+#define TP_KDANGER_QUEEN     tp[787]   // king danger weight: enemy queen attacks king zone
 
 int tp[TP_COUNT] = {
     // [0..63] pst_pawn_mg — v24 Texel-tuned (epoch 8, MSE=0.19436049)
@@ -2977,7 +2984,7 @@ int tp[TP_COUNT] = {
       4,  // [730] TP_KING_SEMI
      17,  // [731] TP_CASTLE_RIGHT
      40,  // [732] TP_CASTLED
-     35,  // [733] TP_THREAT_ATK
+     30,  // [733] TP_THREAT_ATK (pawn threatens undefended N/B)
       0,  // [734] TP_PASSED_MG (replaced by rank-indexed array at tp[756+])
       0,  // [735] TP_PASSED_EG (replaced by rank-indexed array at tp[764+])
      12,  // [736] TP_CAND_DENOM
@@ -3029,6 +3036,13 @@ int tp[TP_COUNT] = {
       5,   // [778] Q_MOB_INNER
       3,   // [779] Q_MOB_OUTER
      15,   // [780] TP_MINOR_THREAT: minor attacks undefended enemy rook/queen
+     50,   // [781] TP_THREAT_R: pawn threatens undefended rook
+     90,   // [782] TP_THREAT_Q: pawn threatens undefended queen
+      1,   // [783] TP_KDANGER_PAWN: king zone pawn attack weight
+      2,   // [784] TP_KDANGER_KNIGHT: king zone knight attack weight
+      2,   // [785] TP_KDANGER_BISHOP: king zone bishop attack weight
+      3,   // [786] TP_KDANGER_ROOK: king zone rook attack weight
+      5,   // [787] TP_KDANGER_QUEEN: king zone queen attack weight
 };
 
 // Inner squares mask: c3-f6 (central 16 squares, weighted more in mobility)
@@ -3454,40 +3468,40 @@ static inline int evaluate_side(int color, int phase, int pawn_score_in, U64 own
                 int enemy_rook   = (color == white) ? r : R;
                 int enemy_queen  = (color == white) ? q : Q;
 
-                // Enemy pawns (weight 1)
+                // Enemy pawns
                 U64 ep_bb = bitboards[enemy_pawn];
                 while (ep_bb) {
                     int esq = get_ls1b_index(ep_bb);
-                    if (pawn_attacks[enemy_color][esq] & king_zone) king_danger += 1;
+                    if (pawn_attacks[enemy_color][esq] & king_zone) king_danger += TP_KDANGER_PAWN;
                     pop_bit(ep_bb, esq);
                 }
-                // Enemy knights (weight 2)
+                // Enemy knights
                 U64 en_bb = bitboards[enemy_knight];
                 while (en_bb) {
                     int esq = get_ls1b_index(en_bb);
-                    if (knight_attacks[esq] & king_zone) king_danger += 2;
+                    if (knight_attacks[esq] & king_zone) king_danger += TP_KDANGER_KNIGHT;
                     pop_bit(en_bb, esq);
                 }
-                // Enemy bishops (weight 2)
+                // Enemy bishops
                 U64 eb_bb = bitboards[enemy_bishop];
                 while (eb_bb) {
                     int esq = get_ls1b_index(eb_bb);
-                    if (get_bishop_attacks(esq, occ_all) & king_zone) king_danger += 2;
+                    if (get_bishop_attacks(esq, occ_all) & king_zone) king_danger += TP_KDANGER_BISHOP;
                     pop_bit(eb_bb, esq);
                 }
-                // Enemy rooks (weight 3)
+                // Enemy rooks
                 U64 er_bb = bitboards[enemy_rook];
                 while (er_bb) {
                     int esq = get_ls1b_index(er_bb);
-                    if (get_rook_attacks(esq, occ_all) & king_zone) king_danger += 3;
+                    if (get_rook_attacks(esq, occ_all) & king_zone) king_danger += TP_KDANGER_ROOK;
                     pop_bit(er_bb, esq);
                 }
-                // Enemy queen (weight 5)
+                // Enemy queen
                 U64 eq_bb = bitboards[enemy_queen];
                 while (eq_bb) {
                     int esq = get_ls1b_index(eq_bb);
                     U64 q_attacks = get_bishop_attacks(esq, occ_all) | get_rook_attacks(esq, occ_all);
-                    if (q_attacks & king_zone) king_danger += 5;
+                    if (q_attacks & king_zone) king_danger += TP_KDANGER_QUEEN;
                     pop_bit(eq_bb, esq);
                 }
 
@@ -3601,11 +3615,12 @@ static inline int evaluate_side(int color, int phase, int pawn_score_in, U64 own
             U64 undefended = attacked & ~ep_atk;
             while (undefended) {
                 int sq = get_ls1b_index(undefended);
-                int pval = 0;
-                if (get_bit(bitboards[en], sq) || get_bit(bitboards[eb], sq)) pval = 300;
-                else if (get_bit(bitboards[er], sq)) pval = 500;
-                else if (get_bit(bitboards[eq], sq)) pval = 900;
-                score += pval / 10;  // N/B=30, R=50, Q=90 cp per threat
+                if (get_bit(bitboards[en], sq) || get_bit(bitboards[eb], sq))
+                    score += TP_THREAT_ATK;
+                else if (get_bit(bitboards[er], sq))
+                    score += TP_THREAT_R;
+                else if (get_bit(bitboards[eq], sq))
+                    score += TP_THREAT_Q;
                 pop_bit(undefended, sq);
             }
         }
@@ -5733,6 +5748,16 @@ static void clamp_params() {
     // MINOR_THREAT [780]: non-negative, capped at 40
     if (tp[780] < 0)  tp[780] = 0;
     if (tp[780] > 40) tp[780] = 40;
+    // THREAT_R [781], THREAT_Q [782]: non-negative pawn threat bonuses
+    if (tp[781] < 0)   tp[781] = 0;
+    if (tp[781] > 150) tp[781] = 150;
+    if (tp[782] < 0)   tp[782] = 0;
+    if (tp[782] > 200) tp[782] = 200;
+    // KDANGER weights [783-787]: non-negative, capped at 20
+    for (int i = 783; i <= 787; i++) {
+        if (tp[i] < 0)  tp[i] = 0;
+        if (tp[i] > 20) tp[i] = 20;
+    }
 }
 
 static void calibrate_K() {
@@ -5794,6 +5819,14 @@ static void print_params(double mse, int epoch) {
     printf("  tp[746] = %4d  // EG_ROOK_PAWN\n", tp[746]);
     // New v23 param
     printf("  tp[747] = %4d  // EG_KING_PAWN\n", tp[747]);
+    printf("  tp[780] = %4d  // MINOR_THREAT\n",  tp[780]);
+    printf("  tp[781] = %4d  // THREAT_R\n",      tp[781]);
+    printf("  tp[782] = %4d  // THREAT_Q\n",      tp[782]);
+    printf("  tp[783] = %4d  // KDANGER_PAWN\n",  tp[783]);
+    printf("  tp[784] = %4d  // KDANGER_KNIGHT\n",tp[784]);
+    printf("  tp[785] = %4d  // KDANGER_BISHOP\n",tp[785]);
+    printf("  tp[786] = %4d  // KDANGER_ROOK\n",  tp[786]);
+    printf("  tp[787] = %4d  // KDANGER_QUEEN\n", tp[787]);
     fflush(stdout);
 }
 
