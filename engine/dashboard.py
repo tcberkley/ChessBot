@@ -13,6 +13,7 @@ Data sources:
 
 import collections
 import csv
+import datetime
 import json
 import os
 import queue
@@ -37,7 +38,9 @@ SF_FEN_CACHE_TTL = 300 # cache each FEN result for 5 min
 CHALLENGE_LOG_PATH = "/root/scripts/challenge_log.csv"
 DAILY_WINDOW_PATH  = "/root/lichess-bot-master/daily_window.txt"
 PROFILE_CACHE_TTL  = 60   # seconds to cache /api/account response
-CHALLENGE_LOG_N    = 30   # max challenge rows to display
+GAMES_CACHE_TTL    = 60   # seconds to cache recent games
+ACTIVITY_N         = 50   # max rows in merged activity feed
+CHALLENGE_LOG_N    = 50   # read last N challenge rows
 
 
 # ── Token loading ─────────────────────────────────────────────────────────────
@@ -73,13 +76,12 @@ def read_challenge_log(path: str, n: int = CHALLENGE_LOG_N) -> list:
 
 def read_daily_sent(path: str) -> "int | None":
     """Read challenges-sent-today count from daily_window.txt.
-    Format: 'timestamp,challenge_count,game_count'
+    Format (newline-separated): timestamp\\nchallenge_count\\ngame_count
     """
     try:
         with open(path) as f:
-            content = f.read().strip()
-        parts = content.split(",")
-        return int(parts[1]) if len(parts) >= 2 else None
+            lines = [l.strip() for l in f.read().splitlines() if l.strip()]
+        return int(lines[1]) if len(lines) >= 2 else None
     except Exception:
         return None
 
@@ -119,6 +121,81 @@ def fetch_bot_profile(token: str) -> "dict | None":
     except Exception:
         pass
     return _profile_cache["data"]  # return stale on error
+
+
+_games_cache: dict = {"ts": 0, "data": None}
+
+
+def fetch_recent_games(token: str, n: int = ACTIVITY_N) -> list:
+    """GET /api/games/user/{bot} — returns list of game dicts, cached GAMES_CACHE_TTL seconds."""
+    now = time.time()
+    if now - _games_cache["ts"] < GAMES_CACHE_TTL and _games_cache["data"] is not None:
+        return _games_cache["data"]
+    try:
+        resp = requests.get(
+            f"{LICHESS_API}/api/games/user/{BOT_USERNAME}",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Accept": "application/x-ndjson",
+            },
+            params={"max": n, "moves": "false", "clocks": "false", "pgnInJson": "false"},
+            timeout=10,
+        )
+        games = []
+        for line in resp.text.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                g = json.loads(line)
+                players = g.get("players", {})
+                bot_color = (
+                    "white"
+                    if players.get("white", {}).get("user", {}).get("name", "").lower()
+                       == BOT_USERNAME.lower()
+                    else "black"
+                )
+                opp_color = "black" if bot_color == "white" else "white"
+                opp       = players.get(opp_color, {})
+                bot_p     = players.get(bot_color, {})
+                opp_name  = opp.get("user", {}).get("name", "?")
+                opp_rating = opp.get("rating")
+                rating_diff = bot_p.get("ratingDiff")
+
+                winner = g.get("winner")
+                if winner is None:
+                    result = "draw"
+                elif winner == bot_color:
+                    result = "win"
+                else:
+                    result = "loss"
+
+                clock = g.get("clock", {})
+                initial   = clock.get("initial", 0)
+                increment = clock.get("increment", 0)
+                tc = f"{initial // 60}+{increment}" if clock else "—"
+
+                created_ms = g.get("createdAt", 0)
+                ts_utc = datetime.datetime.utcfromtimestamp(created_ms / 1000).strftime(
+                    "%Y-%m-%dT%H:%M:%S"
+                )
+                games.append({
+                    "row_type":        "game",
+                    "timestamp_utc":   ts_utc,
+                    "event":           result,
+                    "opponent":        opp_name,
+                    "opponent_rating": opp_rating,
+                    "time_control":    tc,
+                    "rating_diff":     rating_diff,
+                    "game_id":         g.get("id"),
+                })
+            except Exception:
+                pass
+        _games_cache["ts"]   = now
+        _games_cache["data"] = games
+        return games
+    except Exception:
+        return _games_cache["data"] or []
 
 
 # ── SharedState ───────────────────────────────────────────────────────────────
@@ -307,7 +384,7 @@ class SFEngine:
 
     def _open(self):
         try:
-            self._engine = chess.engine.SimpleEngine.popen_uci("stockfish")
+            self._engine = chess.engine.SimpleEngine.popen_uci("/usr/games/stockfish")
             self._engine.configure({"Threads": 1, "Hash": 16})
         except Exception:
             self._engine = None
@@ -395,12 +472,14 @@ def game_monitor_loop(shared: SharedState, token: str):
                 last_sf_fen = None
 
                 if game_id is None:
-                    challenges = read_challenge_log(CHALLENGE_LOG_PATH)
-                    daily_sent = read_daily_sent(DAILY_WINDOW_PATH)
-                    profile    = fetch_bot_profile(token)
+                    challenges  = [dict(r, row_type="challenge") for r in read_challenge_log(CHALLENGE_LOG_PATH)]
+                    games       = fetch_recent_games(token)
+                    activity    = sorted(challenges + games, key=lambda r: r.get("timestamp_utc", ""), reverse=True)[:ACTIVITY_N]
+                    daily_sent  = read_daily_sent(DAILY_WINDOW_PATH)
+                    profile     = fetch_bot_profile(token)
                     shared.update({
                         "type":       "idle",
-                        "challenges": challenges,
+                        "activity":   activity,
                         "daily_sent": daily_sent,
                         "profile":    profile,
                     })
@@ -680,8 +759,16 @@ header h1 { font-size: 1.4rem; font-weight: 600; color: #e8e8f0; }
 .ch-out-declined { color: #e67e22; }
 .ch-in-accepted  { color: #2ecc71; }
 .ch-in-declined  { color: #888;    }
-.ch-dir-out { font-weight:600; color:#3498db; }
-.ch-dir-in  { font-weight:600; color:#2ecc71; }
+.ch-dir-out  { font-weight:600; color:#3498db; }
+.ch-dir-in   { font-weight:600; color:#2ecc71; }
+.ch-dir-game { font-weight:600; color:#9b59b6; }
+.ch-game-win  { color: #2ecc71; font-weight:600; }
+.ch-game-loss { color: #e74c3c; font-weight:600; }
+.ch-game-draw { color: #888;    font-weight:600; }
+.ch-rating-pos { color: #2ecc71; font-size:0.78rem; }
+.ch-rating-neg { color: #e74c3c; font-size:0.78rem; }
+.activity-link { color: #c8d0f0; text-decoration: none; }
+.activity-link:hover { text-decoration: underline; }
 @media (max-width: 720px) {
   .main-grid { grid-template-columns: 1fr; }
   #board { width: 100%; max-width: 340px; margin: 0 auto; }
@@ -794,18 +881,18 @@ header h1 { font-size: 1.4rem; font-weight: 600; color: #e8e8f0; }
     <div id="idle-stats-row"></div>
     <!-- Challenge feed -->
     <div class="card" style="margin-top:14px">
-      <div class="card-title">Challenge Activity</div>
+      <div class="card-title">Activity</div>
       <table class="challenge-table" id="challenge-table">
         <thead>
           <tr>
             <th>Time</th><th>Dir</th><th>Event</th>
-            <th>Opponent</th><th>Rating</th><th>TC</th><th>Reason</th>
+            <th>Opponent</th><th>Rating</th><th>TC</th><th>Info</th>
           </tr>
         </thead>
         <tbody id="challenge-tbody"></tbody>
       </table>
       <div id="challenge-empty" style="display:none;color:#445;font-size:0.85rem;padding:16px 0;text-align:center">
-        No challenge activity yet
+        No activity yet
       </div>
     </div>
   </div>
@@ -980,8 +1067,8 @@ function renderIdle(s) {
     statCard("Challenges Today", daily != null ? daily + " / 250" : null, "daily limit"),
   ].join("");
 
-  // Challenge feed
-  const rows = s && s.challenges;
+  // Activity feed (games + challenges merged)
+  const rows = s && s.activity;
   const tbody = document.getElementById("challenge-tbody");
   const empty = document.getElementById("challenge-empty");
   if (!rows || rows.length === 0) {
@@ -990,20 +1077,37 @@ function renderIdle(s) {
   } else {
     empty.style.display = "none";
     tbody.innerHTML = rows.map(function(r) {
-      const dir    = r.direction === "outgoing" ? "outgoing" : "incoming";
-      const evt    = r.event || "";
-      const cls    = "ch-" + dir.slice(0,3) + "-" + evt;
-      const dirEl  = "<span class='ch-dir-" + dir.slice(0,3) + "'>"
-                   + (dir === "outgoing" ? "\u2192" : "\u2190") + "</span>";
-      const ts     = r.timestamp_utc ? r.timestamp_utc.slice(11,19) : "";
-      const tc     = r.time_control  || "—";
-      const opp    = r.opponent      || "—";
-      const rat    = r.opponent_rating || "—";
-      const reason = r.decline_reason || "";
-      const evtEl  = "<span class='" + cls + "'>" + evt + "</span>";
-      return "<tr><td>" + ts + "</td><td>" + dirEl + "</td><td>" + evtEl
-           + "</td><td>" + opp + "</td><td>" + rat + "</td><td>" + tc
-           + "</td><td>" + reason + "</td></tr>";
+      const ts  = r.timestamp_utc ? r.timestamp_utc.slice(11,19) : "";
+      const tc  = r.time_control  || "—";
+      const rat = r.opponent_rating != null ? r.opponent_rating : "—";
+
+      if (r.row_type === "game") {
+        const url    = "https://lichess.org/" + r.game_id;
+        const dirEl  = "<span class='ch-dir-game'>\u265f</span>";
+        const evtEl  = "<span class='ch-game-" + r.event + "'>" + r.event + "</span>";
+        const oppEl  = "<a href='" + url + "' target='_blank' class='activity-link'>"
+                     + (r.opponent || "—") + " \u2197</a>";
+        const diff   = r.rating_diff;
+        const infoEl = diff != null
+          ? "<span class='" + (diff >= 0 ? "ch-rating-pos" : "ch-rating-neg") + "'>"
+            + (diff >= 0 ? "+" : "") + diff + "</span>"
+          : "";
+        return "<tr><td>" + ts + "</td><td>" + dirEl + "</td><td>" + evtEl
+             + "</td><td>" + oppEl + "</td><td>" + rat + "</td><td>" + tc
+             + "</td><td>" + infoEl + "</td></tr>";
+      } else {
+        const dir    = r.direction === "outgoing" ? "outgoing" : "incoming";
+        const evt    = r.event || "";
+        const cls    = "ch-" + dir.slice(0,3) + "-" + evt;
+        const dirEl  = "<span class='ch-dir-" + dir.slice(0,3) + "'>"
+                     + (dir === "outgoing" ? "\u2192" : "\u2190") + "</span>";
+        const evtEl  = "<span class='" + cls + "'>" + evt + "</span>";
+        const opp    = r.opponent || "—";
+        const reason = r.decline_reason || "";
+        return "<tr><td>" + ts + "</td><td>" + dirEl + "</td><td>" + evtEl
+             + "</td><td>" + opp + "</td><td>" + rat + "</td><td>" + tc
+             + "</td><td>" + reason + "</td></tr>";
+      }
     }).join("");
   }
 }
