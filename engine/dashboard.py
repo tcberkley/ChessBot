@@ -1182,7 +1182,7 @@ function renderStats(s) {
   const tcBtns = [["all","All"]].concat(tcs.map(function(t) { return [t, t]; }));
   document.getElementById("sparkline-tc-buttons").innerHTML = tcBtns.map(function(b) {
     return "<button class='sparkline-tc-btn" + (sparklineTC === b[0] ? " active" : "")
-         + "' onclick='setSparklineTC(\"" + b[0] + "\")'>" + b[1] + "</button>";
+         + "' onclick='setSparklineTC(&quot;" + b[0] + "&quot;)'>" + b[1] + "</button>";
   }).join("");
   document.getElementById("sparkline-wrap").innerHTML = renderSparkline(games, sparklineTC);
 
