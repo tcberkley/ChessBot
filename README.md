@@ -8,7 +8,7 @@ A chess bot running on Lichess
 
 ## Features
 
-**Engine (v20)**
+**Engine (v1.7)**
 - Magic bitboard move generation
 - Negamax + Principal Variation Search
 - Iterative deepening with aspiration windows

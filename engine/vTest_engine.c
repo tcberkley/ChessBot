@@ -3599,7 +3599,15 @@ static inline int evaluate_side(int color, int phase, int pawn_score_in, U64 own
                 pop_bit(epb, esq);
             }
             U64 undefended = attacked & ~ep_atk;
-            score += count_bits(undefended) * TP_THREAT_ATK;
+            while (undefended) {
+                int sq = get_ls1b_index(undefended);
+                int pval = 0;
+                if (get_bit(bitboards[en], sq) || get_bit(bitboards[eb], sq)) pval = 300;
+                else if (get_bit(bitboards[er], sq)) pval = 500;
+                else if (get_bit(bitboards[eq], sq)) pval = 900;
+                score += pval / 10;  // N/B=30, R=50, Q=90 cp per threat
+                pop_bit(undefended, sq);
+            }
         }
     }
 
@@ -4642,7 +4650,7 @@ static inline int negamax(int alpha, int beta, int depth, int null_ok)
             && legal_moves_count > 0 && quiets_tried >= lmp_threshold[depth] + improving * 3)
             continue;
 
-        // v27: History-based quiet pruning — skip clearly bad quiet moves at low depth
+        // v2.2: History-based quiet pruning — skip clearly bad quiet moves at low depth
         if (!pv_node && !in_check && depth <= 3 && !is_capture && !is_promotion
             && move != killer_moves[0][ply] && move != killer_moves[1][ply]
             && history_moves[get_move_piece(move)][get_move_target(move)] < -2048 * depth)
@@ -4679,16 +4687,16 @@ static inline int negamax(int alpha, int beta, int depth, int null_ok)
             if (legal_moves_count >= 4 && depth >= 3 && !in_check && !is_capture && !is_promotion) {
                 int idx = legal_moves_count < 64 ? legal_moves_count : 63;
                 reduction = lmr_table[depth < 64 ? depth : 63][idx];
-                // v27: Reduce more when not improving (eval stagnating)
+                // v2.2: Reduce more when not improving (eval stagnating)
                 reduction += !improving;
                 // v19: History-adjusted LMR — reduce less for moves with strong history score
                 int hist = history_moves[get_move_piece(move)][get_move_target(move)];
                 reduction -= hist / 8192;
-                // v27: Continuation history adjustment in LMR
+                // v2.2: Continuation history adjustment in LMR
                 if (cm_piece)
                     reduction -= cont_hist[cm_piece][cm_to][get_move_piece(move)][get_move_target(move)] / 16384;
                 if (reduction < 0) reduction = 0;
-                if (reduction > depth - 2) reduction = depth - 2;
+                if (reduction > depth - 1) reduction = depth - 1;
                 // Don't reduce if move gives check
                 if (is_in_check()) reduction = 0;
             }
@@ -4762,9 +4770,15 @@ static inline int negamax(int alpha, int beta, int depth, int null_ok)
 
         // History malus: penalize quiet moves that fail to improve alpha
         if (!is_capture && !is_promotion && score <= alpha) {
-            int malus = depth * depth / 2;
+            int malus = depth * depth;
             int *h = &history_moves[get_move_piece(move)][get_move_target(move)];
             *h -= malus + *h * malus / 16384;
+            // Continuation history malus (symmetric with cont_hist bonus)
+            if (cm_piece) {
+                short *ch = &cont_hist[cm_piece][cm_to][get_move_piece(move)][get_move_target(move)];
+                int ch_val = (int)*ch - malus - (int)*ch * malus / 16384;
+                *ch = (short)(ch_val > 32767 ? 32767 : (ch_val < -32768 ? -32768 : ch_val));
+            }
         }
     }
 

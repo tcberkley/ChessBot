@@ -3,73 +3,67 @@ CFLAGS = -O3 -Wall -Wno-unused-variable -Wno-unused-function
 V14FLAGS = -O3 -march=native -fomit-frame-pointer -Wall -Wno-unused-variable -Wno-unused-function
 LDFLAGS = -lm
 
-all: v13_engine v14_engine v15_engine v16_engine v17_engine v18_engine v19_engine v20_engine v20_tuner v21_engine v22_engine v23_engine v24_engine v25_engine v26_engine v27_engine
+all: v1.0_engine v1.1_engine v1.2_engine v1.3_engine v1.4_engine v1.5_engine v1.6_engine v1.7_engine v1.7_tuner v1.8_engine v1.9_engine v1.10_engine v1.11_engine v2.0_engine v2.1_engine
 
-v13_engine: v13_engine.c
-	$(CC) $(CFLAGS) -o v13_engine v13_engine.c $(LDFLAGS)
+v1.0_engine: v1.0_engine.c
+	$(CC) $(CFLAGS) -o v1.0_engine v1.0_engine.c $(LDFLAGS)
 
-v14_engine: v14_engine.c
-	$(CC) $(V14FLAGS) -o v14_engine v14_engine.c $(LDFLAGS)
+v1.1_engine: v1.1_engine.c
+	$(CC) $(V14FLAGS) -o v1.1_engine v1.1_engine.c $(LDFLAGS)
 
-v15_engine: v15_engine.c
-	$(CC) $(V14FLAGS) -o v15_engine v15_engine.c $(LDFLAGS)
+v1.2_engine: v1.2_engine.c
+	$(CC) $(V14FLAGS) -o v1.2_engine v1.2_engine.c $(LDFLAGS)
 
-v16_engine: v16_engine.c
-	$(CC) $(V14FLAGS) -o v16_engine v16_engine.c $(LDFLAGS)
+v1.3_engine: v1.3_engine.c
+	$(CC) $(V14FLAGS) -o v1.3_engine v1.3_engine.c $(LDFLAGS)
 
-v17_engine: v17_engine.c
-	$(CC) $(V14FLAGS) -o v17_engine v17_engine.c $(LDFLAGS)
+v1.4_engine: v1.4_engine.c
+	$(CC) $(V14FLAGS) -o v1.4_engine v1.4_engine.c $(LDFLAGS)
 
-v18_engine: v18_engine.c
-	$(CC) $(V14FLAGS) -pthread -o v18_engine v18_engine.c $(LDFLAGS)
+v1.5_engine: v1.5_engine.c
+	$(CC) $(V14FLAGS) -pthread -o v1.5_engine v1.5_engine.c $(LDFLAGS)
 
-v19_engine: v19_engine.c
-	$(CC) $(V14FLAGS) -pthread -o v19_engine v19_engine.c $(LDFLAGS)
+v1.6_engine: v1.6_engine.c
+	$(CC) $(V14FLAGS) -pthread -o v1.6_engine v1.6_engine.c $(LDFLAGS)
 
-v20_engine: v20_engine.c
-	$(CC) $(V14FLAGS) -pthread -o v20_engine v20_engine.c $(LDFLAGS)
+v1.7_engine: v1.7_engine.c
+	$(CC) $(V14FLAGS) -pthread -o v1.7_engine v1.7_engine.c $(LDFLAGS)
 
-v20_tuner: v20_engine.c
-	$(CC) $(V14FLAGS) -DTUNER -o v20_tuner v20_engine.c -lm
+v1.7_tuner: v1.7_engine.c
+	$(CC) $(V14FLAGS) -DTUNER -o v1.7_tuner v1.7_engine.c -lm
 
-v21_engine: v21_engine.c
-	$(CC) $(V14FLAGS) -pthread -o v21_engine v21_engine.c $(LDFLAGS)
+v1.8_engine: v1.8_engine.c
+	$(CC) $(V14FLAGS) -pthread -o v1.8_engine v1.8_engine.c $(LDFLAGS)
 
-v22_engine: v22_engine.c
-	$(CC) $(V14FLAGS) -pthread -o v22_engine v22_engine.c $(LDFLAGS)
+v1.9_engine: v1.9_engine.c
+	$(CC) $(V14FLAGS) -pthread -o v1.9_engine v1.9_engine.c $(LDFLAGS)
 
-v22_tuner: v22_engine.c
-	$(CC) $(V14FLAGS) -DTUNER -o v22_tuner v22_engine.c -lm
+v1.9_tuner: v1.9_engine.c
+	$(CC) $(V14FLAGS) -DTUNER -o v1.9_tuner v1.9_engine.c -lm
 
-v23_engine: v23_engine.c
-	$(CC) $(V14FLAGS) -pthread -o v23_engine v23_engine.c $(LDFLAGS)
+v1.10_engine: v1.10_engine.c
+	$(CC) $(V14FLAGS) -pthread -o v1.10_engine v1.10_engine.c $(LDFLAGS)
 
-v23_tuner: v23_engine.c
-	$(CC) $(V14FLAGS) -DTUNER -o v23_tuner v23_engine.c -lm
+v1.10_tuner: v1.10_engine.c
+	$(CC) $(V14FLAGS) -DTUNER -o v1.10_tuner v1.10_engine.c -lm
 
-v24_engine: v24_engine.c
-	$(CC) $(V14FLAGS) -pthread -o v24_engine v24_engine.c $(LDFLAGS)
+v1.11_engine: v1.11_engine.c
+	$(CC) $(V14FLAGS) -pthread -o v1.11_engine v1.11_engine.c $(LDFLAGS)
 
-v24_tuner: v24_engine.c
-	$(CC) $(V14FLAGS) -DTUNER -o v24_tuner v24_engine.c -lm
+v1.11_tuner: v1.11_engine.c
+	$(CC) $(V14FLAGS) -DTUNER -o v1.11_tuner v1.11_engine.c -lm
 
-v25_engine: v25_engine.c fathom.c
-	$(CC) $(V14FLAGS) -pthread -o v25_engine v25_engine.c fathom.c $(LDFLAGS)
+v2.0_engine: v2.0_engine.c fathom.c
+	$(CC) $(V14FLAGS) -pthread -o v2.0_engine v2.0_engine.c fathom.c $(LDFLAGS)
 
-v25_tuner: v25_engine.c fathom.c
-	$(CC) $(V14FLAGS) -DTUNER -o v25_tuner v25_engine.c fathom.c -lm
+v2.0_tuner: v2.0_engine.c fathom.c
+	$(CC) $(V14FLAGS) -DTUNER -o v2.0_tuner v2.0_engine.c fathom.c -lm
 
-v26_engine: v26_engine.c fathom.c
-	$(CC) $(V14FLAGS) -pthread -o v26_engine v26_engine.c fathom.c $(LDFLAGS)
+v2.1_engine: v2.1_engine.c fathom.c
+	$(CC) $(V14FLAGS) -pthread -o v2.1_engine v2.1_engine.c fathom.c $(LDFLAGS)
 
-v26_tuner: v26_engine.c fathom.c
-	$(CC) $(V14FLAGS) -DTUNER -o v26_tuner v26_engine.c fathom.c -lm
-
-v27_engine: v27_engine.c fathom.c
-	$(CC) $(V14FLAGS) -pthread -o v27_engine v27_engine.c fathom.c $(LDFLAGS)
-
-v27_tuner: v27_engine.c fathom.c
-	$(CC) $(V14FLAGS) -DTUNER -o v27_tuner v27_engine.c fathom.c -lm
+v2.1_tuner: v2.1_engine.c fathom.c
+	$(CC) $(V14FLAGS) -DTUNER -o v2.1_tuner v2.1_engine.c fathom.c -lm
 
 vTest_engine: vTest_engine.c fathom.c
 	$(CC) $(V14FLAGS) -pthread -o vTest_engine vTest_engine.c fathom.c $(LDFLAGS)
@@ -78,6 +72,6 @@ vTest_tuner: vTest_engine.c
 	$(CC) $(V14FLAGS) -DTUNER -o vTest_tuner vTest_engine.c -lm
 
 clean:
-	rm -f v13_engine v14_engine v15_engine v16_engine v17_engine v18_engine v19_engine v20_engine v20_tuner v21_engine v22_engine v22_tuner v23_engine v23_tuner v24_engine v24_tuner v25_engine v25_tuner v26_engine v26_tuner v27_engine v27_tuner vTest_engine vTest_tuner
+	rm -f v1.0_engine v1.1_engine v1.2_engine v1.3_engine v1.4_engine v1.5_engine v1.6_engine v1.7_engine v1.7_tuner v1.8_engine v1.9_engine v1.9_tuner v1.10_engine v1.10_tuner v1.11_engine v1.11_tuner v2.0_engine v2.0_tuner v2.1_engine v2.1_tuner vTest_engine vTest_tuner
 
 .PHONY: all clean
