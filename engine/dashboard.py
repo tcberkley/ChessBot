@@ -187,6 +187,7 @@ def fetch_recent_games(token: str, n: int = ACTIVITY_N) -> list:
                     "opponent_rating": opp_rating,
                     "time_control":    tc,
                     "rating_diff":     rating_diff,
+                    "bot_rating":      bot_p.get("rating"),
                     "game_id":         g.get("id"),
                 })
             except Exception:
@@ -755,6 +756,60 @@ header h1 { font-size: 1.4rem; font-weight: 600; color: #e8e8f0; }
   font-variant-numeric: tabular-nums;
   border-bottom: 1px solid #1a1a30;
 }
+.view-tabs { display:flex; gap:6px; }
+.view-tab {
+  padding: 6px 20px;
+  border-radius: 6px;
+  border: 1px solid #2d2d54;
+  background: #0f1630;
+  color: #6878a8;
+  cursor: pointer;
+  font-size: 0.85rem;
+  font-weight: 600;
+  font-family: inherit;
+  transition: all 0.15s;
+}
+.view-tab:hover { color: #c8d0f0; border-color: #4a4a74; }
+.view-tab.active { background: #16213e; color: #e8e8f0; border-color: #3498db; }
+.stats-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  margin-top: 0;
+}
+@media (max-width: 720px) { .stats-grid { grid-template-columns: 1fr; } }
+#card-rating-trend { grid-column: 1 / -1; }
+.sparkline-tc-btn {
+  padding: 3px 10px;
+  border-radius: 4px;
+  border: 1px solid #2d2d54;
+  background: #0f1630;
+  color: #6878a8;
+  cursor: pointer;
+  font-size: 0.75rem;
+  font-family: inherit;
+}
+.sparkline-tc-btn.active { color: #e8e8f0; border-color: #3498db; background: #16213e; }
+.record-bar {
+  height: 22px; border-radius: 4px; overflow: hidden;
+  display: flex; margin: 10px 0 6px;
+}
+.record-bar-w { background: #2ecc71; }
+.record-bar-d { background: #555; }
+.record-bar-l { background: #e74c3c; }
+.record-legend { display:flex; gap:16px; font-size:0.8rem; }
+.record-legend span { display:flex; align-items:center; gap:5px; }
+.legend-dot { width:10px; height:10px; border-radius:50%; flex-shrink:0; }
+.by-tc-table { width:100%; border-collapse:collapse; font-size:0.82rem; }
+.by-tc-table th { text-align:left; font-size:0.68rem; color:#6878a8; text-transform:uppercase;
+  padding:4px 6px; border-bottom:1px solid #2d2d44; }
+.by-tc-table td { padding:5px 6px; color:#c8d0f0; font-variant-numeric:tabular-nums;
+  border-bottom:1px solid #1a1a30; }
+.top-opp-table { width:100%; border-collapse:collapse; font-size:0.82rem; }
+.top-opp-table th { text-align:left; font-size:0.68rem; color:#6878a8; text-transform:uppercase;
+  padding:4px 6px; border-bottom:1px solid #2d2d44; }
+.top-opp-table td { padding:5px 6px; color:#c8d0f0; font-variant-numeric:tabular-nums;
+  border-bottom:1px solid #1a1a30; }
 .ch-out-sent     { color: #3498db; }
 .ch-out-declined { color: #e67e22; }
 .ch-in-accepted  { color: #2ecc71; }
@@ -877,22 +932,54 @@ header h1 { font-size: 1.4rem; font-weight: 600; color: #e8e8f0; }
   </div>
 
   <div id="idle-screen">
-    <!-- Top row: bot stats cards -->
+    <!-- Stat cards row (always visible) -->
     <div id="idle-stats-row"></div>
-    <!-- Challenge feed -->
-    <div class="card" style="margin-top:14px">
-      <div class="card-title">Activity</div>
-      <table class="challenge-table" id="challenge-table">
-        <thead>
-          <tr>
-            <th>Time</th><th>Dir</th><th>Event</th>
-            <th>Opponent</th><th>Rating</th><th>TC</th><th>Info</th>
-          </tr>
-        </thead>
-        <tbody id="challenge-tbody"></tbody>
-      </table>
-      <div id="challenge-empty" style="display:none;color:#445;font-size:0.85rem;padding:16px 0;text-align:center">
-        No activity yet
+
+    <!-- Tab buttons -->
+    <div class="view-tabs" style="margin-top:16px">
+      <button class="view-tab active" id="tab-activity" onclick="switchTab('activity')">Activity</button>
+      <button class="view-tab" id="tab-stats" onclick="switchTab('stats')">Stats</button>
+    </div>
+
+    <!-- Activity panel -->
+    <div id="panel-activity">
+      <div class="card">
+        <div class="card-title">Activity</div>
+        <table class="challenge-table" id="challenge-table">
+          <thead>
+            <tr>
+              <th>Time</th><th>Dir</th><th>Event</th>
+              <th>Opponent</th><th>Rating</th><th>TC</th><th>Info</th>
+            </tr>
+          </thead>
+          <tbody id="challenge-tbody"></tbody>
+        </table>
+        <div id="challenge-empty" style="display:none;color:#445;font-size:0.85rem;padding:16px 0;text-align:center">
+          No activity yet
+        </div>
+      </div>
+    </div>
+
+    <!-- Stats panel -->
+    <div id="panel-stats" style="display:none">
+      <div class="stats-grid">
+        <div class="card" id="card-rating-trend">
+          <div class="card-title">Rating Trend</div>
+          <div id="sparkline-wrap"></div>
+          <div id="sparkline-tc-buttons" style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap"></div>
+        </div>
+        <div class="card" id="card-record">
+          <div class="card-title">Overall Record</div>
+          <div id="record-bar-wrap"></div>
+        </div>
+        <div class="card" id="card-by-tc">
+          <div class="card-title">By Time Control</div>
+          <div id="by-tc-wrap"></div>
+        </div>
+        <div class="card" id="card-top-opp">
+          <div class="card-title">Top Opponents</div>
+          <div id="top-opp-wrap"></div>
+        </div>
       </div>
     </div>
   </div>
@@ -909,6 +996,9 @@ document.head.appendChild(_hs);
 
 // ── State ───────────────────────────────────────────────────────────────────
 let board = null;
+let activeTab = "activity";
+let lastIdleState = null;
+let sparklineTC = "all";
 let clockInterval = null;
 let wtime_ms = 0, btime_ms = 0;
 let currentTurn = "white";
@@ -1033,6 +1123,156 @@ function computeCaptures(fen) {
   return captured; // captured.w = white pieces taken, captured.b = black pieces taken
 }
 
+// ── Tab switching ────────────────────────────────────────────────────────────
+function switchTab(tab) {
+  activeTab = tab;
+  document.getElementById("tab-activity").classList.toggle("active", tab === "activity");
+  document.getElementById("tab-stats").classList.toggle("active", tab === "stats");
+  document.getElementById("panel-activity").style.display = tab === "activity" ? "block" : "none";
+  document.getElementById("panel-stats").style.display    = tab === "stats"    ? "block" : "none";
+  if (tab === "stats" && lastIdleState) renderStats(lastIdleState);
+}
+
+// ── Stats panel ──────────────────────────────────────────────────────────────
+function renderSparkline(games, tc) {
+  const filtered = tc === "all" ? games : games.filter(function(g) { return g.time_control === tc; });
+  const chrono   = filtered.slice().reverse();
+  const pts      = chrono.map(function(g) { return g.bot_rating; }).filter(function(r) { return r != null; });
+  if (pts.length < 2) {
+    return "<div style='color:#445;font-size:0.85rem;padding:20px 0;text-align:center'>Not enough data</div>";
+  }
+  const W = 600, H = 90, PX = 12, PY = 10;
+  const lo = Math.min.apply(null, pts) - 5;
+  const hi = Math.max.apply(null, pts) + 5;
+  const range = hi - lo || 1;
+  const coords = pts.map(function(r, i) {
+    const x = PX + (i / (pts.length - 1)) * (W - 2 * PX);
+    const y = PY + (1 - (r - lo) / range) * (H - 2 * PY);
+    return [x.toFixed(1), y.toFixed(1)];
+  });
+  const polyline = coords.map(function(c) { return c[0] + "," + c[1]; }).join(" ");
+  const lx = coords[coords.length - 1][0];
+  const ly = coords[coords.length - 1][1];
+  const first = pts[0], last = pts[pts.length - 1];
+  const delta = last - first;
+  const deltaStr = (delta >= 0 ? "+" : "") + delta;
+  const deltaCol = delta >= 0 ? "#2ecc71" : "#e74c3c";
+  return "<div style='display:flex;align-items:baseline;gap:10px;margin-bottom:4px'>"
+       + "<span style='font-size:1.3rem;font-weight:700;color:#e8e8f0'>" + last + "</span>"
+       + "<span style='font-size:0.85rem;color:" + deltaCol + "'>" + deltaStr + " over " + pts.length + " games</span>"
+       + "</div>"
+       + "<svg viewBox='0 0 " + W + " " + H + "' style='width:100%;height:80px'>"
+       + "<polyline points='" + polyline + "' fill='none' stroke='#3498db' stroke-width='2'/>"
+       + "<circle cx='" + lx + "' cy='" + ly + "' r='3.5' fill='#3498db'/>"
+       + "</svg>";
+}
+
+function renderStats(s) {
+  const games = (s.activity || []).filter(function(r) { return r.row_type === "game"; });
+  if (games.length === 0) {
+    ["sparkline-wrap","record-bar-wrap","by-tc-wrap","top-opp-wrap"].forEach(function(id) {
+      document.getElementById(id).innerHTML =
+        "<div style='color:#445;font-size:0.85rem;padding:12px 0'>No game data</div>";
+    });
+    return;
+  }
+
+  // Sparkline
+  const tcs = Array.from(new Set(games.map(function(g) { return g.time_control; }))).sort();
+  const tcBtns = [["all","All"]].concat(tcs.map(function(t) { return [t, t]; }));
+  document.getElementById("sparkline-tc-buttons").innerHTML = tcBtns.map(function(b) {
+    return "<button class='sparkline-tc-btn" + (sparklineTC === b[0] ? " active" : "")
+         + "' onclick='setSparklineTC(\"" + b[0] + "\")'>" + b[1] + "</button>";
+  }).join("");
+  document.getElementById("sparkline-wrap").innerHTML = renderSparkline(games, sparklineTC);
+
+  // Overall record
+  let W = 0, D = 0, L = 0;
+  games.forEach(function(g) {
+    if (g.event === "win") W++;
+    else if (g.event === "draw") D++;
+    else L++;
+  });
+  const total = W + D + L;
+  const score = ((W + D * 0.5) / total * 100).toFixed(1);
+  const wp = (W/total*100).toFixed(1), dp = (D/total*100).toFixed(1), lp = (L/total*100).toFixed(1);
+  document.getElementById("record-bar-wrap").innerHTML =
+    "<div class='record-bar'>"
+    + "<div class='record-bar-w' style='width:" + wp + "%'></div>"
+    + "<div class='record-bar-d' style='width:" + dp + "%'></div>"
+    + "<div class='record-bar-l' style='width:" + lp + "%'></div>"
+    + "</div>"
+    + "<div class='record-legend'>"
+    + "<span><div class='legend-dot' style='background:#2ecc71'></div>" + W + "W (" + wp + "%)</span>"
+    + "<span><div class='legend-dot' style='background:#555'></div>" + D + "D (" + dp + "%)</span>"
+    + "<span><div class='legend-dot' style='background:#e74c3c'></div>" + L + "L (" + lp + "%)</span>"
+    + "</div>"
+    + "<div style='margin-top:8px;font-size:0.8rem;color:#6878a8'>Score: <span style='color:#e8e8f0;font-weight:700'>" + score + "%</span>"
+    + " &nbsp;|&nbsp; " + total + " games</div>";
+
+  // Streak
+  let streak = 0, streakType = null;
+  for (let i = 0; i < games.length; i++) {
+    const e = games[i].event;
+    if (i === 0) { streakType = e; streak = 1; }
+    else if (e === streakType) streak++;
+    else break;
+  }
+  const streakCol = streakType === "win" ? "#2ecc71" : streakType === "loss" ? "#e74c3c" : "#888";
+  document.getElementById("record-bar-wrap").innerHTML +=
+    "<div style='margin-top:6px;font-size:0.8rem;color:#6878a8'>Current streak: "
+    + "<span style='color:" + streakCol + ";font-weight:700'>" + streak + " " + streakType + (streak > 1 ? "s" : "") + "</span></div>";
+
+  // By time control
+  const byTC = {};
+  games.forEach(function(g) {
+    const t = g.time_control || "?";
+    if (!byTC[t]) byTC[t] = {w:0,d:0,l:0};
+    if (g.event === "win") byTC[t].w++;
+    else if (g.event === "draw") byTC[t].d++;
+    else byTC[t].l++;
+  });
+  const tcRows = Object.keys(byTC).sort().map(function(t) {
+    const b = byTC[t];
+    const n = b.w + b.d + b.l;
+    const sc = ((b.w + b.d * 0.5) / n * 100).toFixed(0);
+    return "<tr><td>" + t + "</td><td style='color:#2ecc71'>" + b.w + "</td>"
+         + "<td style='color:#888'>" + b.d + "</td><td style='color:#e74c3c'>" + b.l + "</td>"
+         + "<td style='color:#e8e8f0;font-weight:600'>" + sc + "%</td></tr>";
+  }).join("");
+  document.getElementById("by-tc-wrap").innerHTML =
+    "<table class='by-tc-table'><thead><tr><th>TC</th><th>W</th><th>D</th><th>L</th><th>Score</th></tr></thead>"
+    + "<tbody>" + tcRows + "</tbody></table>";
+
+  // Top opponents (by games played)
+  const oppMap = {};
+  games.forEach(function(g) {
+    const n = g.opponent || "?";
+    if (!oppMap[n]) oppMap[n] = {w:0,d:0,l:0,rating:g.opponent_rating};
+    if (g.event === "win") oppMap[n].w++;
+    else if (g.event === "draw") oppMap[n].d++;
+    else oppMap[n].l++;
+  });
+  const topOpps = Object.keys(oppMap)
+    .map(function(n) { const b = oppMap[n]; return {name:n, total:b.w+b.d+b.l, w:b.w, d:b.d, l:b.l, rating:b.rating}; })
+    .sort(function(a,b) { return b.total - a.total; })
+    .slice(0, 8);
+  const oppRows = topOpps.map(function(o) {
+    const score = ((o.w + o.d * 0.5) / o.total * 100).toFixed(0);
+    return "<tr><td>" + o.name + "</td><td style='color:#8898c8'>" + (o.rating || "—") + "</td>"
+         + "<td>" + o.total + "</td><td style='font-weight:600;color:"
+         + (parseFloat(score) >= 50 ? "#2ecc71" : "#e74c3c") + "'>" + score + "%</td></tr>";
+  }).join("");
+  document.getElementById("top-opp-wrap").innerHTML =
+    "<table class='top-opp-table'><thead><tr><th>Opponent</th><th>Rating</th><th>Games</th><th>Score</th></tr></thead>"
+    + "<tbody>" + oppRows + "</tbody></table>";
+}
+
+function setSparklineTC(tc) {
+  sparklineTC = tc;
+  if (lastIdleState) renderStats(lastIdleState);
+}
+
 // ── Render ───────────────────────────────────────────────────────────────────
 function statCard(label, value, sub) {
   const val = value != null ? String(value) : "—";
@@ -1046,6 +1286,7 @@ function statCard(label, value, sub) {
 function renderIdle(s) {
   stopClock();
   lastClockWtime = -1; lastClockBtime = -1; lastClockTurn = null;
+  lastIdleState = s;
   document.getElementById("game-view").style.display = "none";
   document.getElementById("idle-screen").style.display = "block";
   document.getElementById("status-dot").classList.remove("live");
@@ -1110,6 +1351,9 @@ function renderIdle(s) {
       }
     }).join("");
   }
+
+  // Re-render stats panel if it's currently visible
+  if (activeTab === "stats" && s) renderStats(s);
 }
 
 function renderUpdate(s) {
