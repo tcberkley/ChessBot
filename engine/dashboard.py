@@ -74,16 +74,19 @@ def read_challenge_log(path: str, n: int = CHALLENGE_LOG_N) -> list:
         return []
 
 
-def read_daily_sent(path: str) -> "int | None":
-    """Read challenges-sent-today count from daily_window.txt.
+def read_daily_counts(path: str) -> dict:
+    """Return {"challenges": int|None, "games": int|None} from daily_window.txt.
     Format (newline-separated): timestamp\\nchallenge_count\\ngame_count
     """
     try:
         with open(path) as f:
             lines = [l.strip() for l in f.read().splitlines() if l.strip()]
-        return int(lines[1]) if len(lines) >= 2 else None
+        return {
+            "challenges": int(lines[1]) if len(lines) >= 2 else None,
+            "games":      int(lines[2]) if len(lines) >= 3 else None,
+        }
     except Exception:
-        return None
+        return {"challenges": None, "games": None}
 
 
 _profile_cache: dict = {"ts": 0, "data": None}
@@ -458,8 +461,16 @@ def game_monitor_loop(shared: SharedState, token: str):
                 timeout=5,
             )
             data = resp.json()
-            games = data.get("nowPlaying", [])
-            game_id = games[0]["gameId"] if games else None
+            nowPlaying = data.get("nowPlaying", [])
+            game_id = nowPlaying[0]["gameId"] if nowPlaying else None
+
+            # Collect activity/profile every cycle (cached 60s)
+            challenges  = [dict(r, row_type="challenge") for r in read_challenge_log(CHALLENGE_LOG_PATH)]
+            games_data  = fetch_recent_games(token)
+            activity    = sorted(challenges + games_data, key=lambda r: r.get("timestamp_utc", ""), reverse=True)[:ACTIVITY_N]
+            daily_counts = read_daily_counts(DAILY_WINDOW_PATH)
+            profile      = fetch_bot_profile(token)
+            extra        = {"activity": activity, "challenges": challenges, "daily_counts": daily_counts, "profile": profile}
 
             if game_id != current_game_id:
                 # Stop old stream thread
@@ -473,17 +484,7 @@ def game_monitor_loop(shared: SharedState, token: str):
                 last_sf_fen = None
 
                 if game_id is None:
-                    challenges  = [dict(r, row_type="challenge") for r in read_challenge_log(CHALLENGE_LOG_PATH)]
-                    games       = fetch_recent_games(token)
-                    activity    = sorted(challenges + games, key=lambda r: r.get("timestamp_utc", ""), reverse=True)[:ACTIVITY_N]
-                    daily_sent  = read_daily_sent(DAILY_WINDOW_PATH)
-                    profile     = fetch_bot_profile(token)
-                    shared.update({
-                        "type":       "idle",
-                        "activity":   activity,
-                        "daily_sent": daily_sent,
-                        "profile":    profile,
-                    })
+                    shared.update({"type": "idle", **extra})
                     stream_stop_event = None
                     stream_thread = None
                 else:
@@ -497,17 +498,9 @@ def game_monitor_loop(shared: SharedState, token: str):
                     )
                     stream_thread.start()
 
-            # Refresh idle state every poll cycle (challenge feed + profile)
+            # Refresh idle state every poll cycle
             if game_id is None:
-                challenges = read_challenge_log(CHALLENGE_LOG_PATH)
-                daily_sent = read_daily_sent(DAILY_WINDOW_PATH)
-                profile    = fetch_bot_profile(token)
-                shared.update({
-                    "type":       "idle",
-                    "challenges": challenges,
-                    "daily_sent": daily_sent,
-                    "profile":    profile,
-                })
+                shared.update({"type": "idle", **extra})
 
             # Tail game_stats.jsonl for engine stats
             if game_id:
@@ -530,6 +523,7 @@ def game_monitor_loop(shared: SharedState, token: str):
                             sf = sf_engine.analyse(fen)
                             current["sf"] = sf
                         current["engine"] = last_engine_stats
+                        current.update(extra)
                         shared.update(current)
 
         except Exception:
@@ -708,9 +702,10 @@ header h1 { font-size: 1.4rem; font-weight: 600; color: #e8e8f0; }
 #idle-screen { display: none; }
 #idle-stats-row {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
   gap: 12px;
-  margin-bottom: 4px;
+  margin-bottom: 10px;
+  align-items: stretch;
 }
 .idle-stat-card {
   background: #16213e;
@@ -824,11 +819,67 @@ header h1 { font-size: 1.4rem; font-weight: 600; color: #e8e8f0; }
 .ch-rating-neg { color: #e74c3c; font-size:0.78rem; }
 .activity-link { color: #c8d0f0; text-decoration: none; }
 .activity-link:hover { text-decoration: underline; }
+.dir-badge { font-size:0.65rem; font-weight:700; padding:2px 6px; border-radius:3px; letter-spacing:0.05em; }
+.dir-out   { background:#1a3a5c; color:#3498db; }
+.dir-in    { background:#1a3a1a; color:#2ecc71; }
+.bot-badge { font-size:0.6rem; font-weight:700; color:#9b59b6; background:#1e1030;
+             padding:1px 4px; border-radius:2px; margin-left:4px; vertical-align:middle; }
 @media (max-width: 720px) {
   .main-grid { grid-template-columns: 1fr; }
   #board { width: 100%; max-width: 340px; margin: 0 auto; }
   .board-col { padding-left: 0; }
   .eval-bar-wrap { display: none; }
+}
+.info-btn {
+  width: 28px; height: 28px; border-radius: 50%;
+  border: 1px solid #2d2d54; background: #0f1630;
+  color: #6878a8; cursor: pointer; font-size: 0.85rem;
+  font-weight: 700; font-family: inherit; flex-shrink: 0;
+  transition: all 0.15s; margin-left: 8px;
+}
+.info-btn:hover { color: #c8d0f0; border-color: #4a4a74; }
+.info-modal-backdrop {
+  display: none; position: fixed; inset: 0;
+  background: rgba(0,0,0,0.6); z-index: 100;
+  align-items: center; justify-content: center;
+}
+.info-modal-backdrop.open { display: flex; }
+.info-modal {
+  background: #16213e; border: 1px solid #2d2d54;
+  border-radius: 10px; padding: 24px 28px; min-width: 280px;
+  max-width: 380px; width: 90%; position: relative;
+}
+.info-modal h2 {
+  font-size: 1rem; font-weight: 700; color: #e8e8f0;
+  margin-bottom: 18px;
+}
+.info-modal-close {
+  position: absolute; top: 12px; right: 14px;
+  background: none; border: none; color: #6878a8;
+  font-size: 1.2rem; cursor: pointer; line-height: 1;
+}
+.info-modal-close:hover { color: #e8e8f0; }
+.info-link-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 0; border-bottom: 1px solid #2d2d44;
+  text-decoration: none; color: #c8d0f0;
+  font-size: 0.9rem; transition: color 0.15s;
+}
+.info-link-row:last-child { border-bottom: none; }
+.info-link-row:hover { color: #3498db; }
+.info-link-icon { font-size: 1.1rem; width: 22px; text-align: center; flex-shrink: 0; }
+.table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.table-scroll table { white-space: nowrap; }
+@media (max-width: 600px) {
+  .container { padding: 10px; }
+  header { flex-wrap: wrap; padding-bottom: 14px; }
+  header h1 { font-size: 1.05rem; flex: 1; }
+  #header-tabs { order: 3; flex: 0 0 100%; justify-content: center; margin-left: 0 !important; }
+  .info-btn { margin-left: 0; }
+  .card { padding: 10px 12px; }
+  .view-tab { padding: 5px 14px; font-size: 0.8rem; }
+  .idle-stat-value { font-size: 1.3rem; }
+  .player-name { overflow-wrap: break-word; word-break: break-all; }
 }
 </style>
 </head>
@@ -837,9 +888,43 @@ header h1 { font-size: 1.4rem; font-weight: 600; color: #e8e8f0; }
   <header>
     <div class="status-dot" id="status-dot"></div>
     <h1>tombot1234 — Live Dashboard</h1>
+    <div class="view-tabs" id="header-tabs" style="margin-left:auto">
+      <button class="view-tab active" id="tab-game"     onclick="switchTab('game')">Game</button>
+      <button class="view-tab"        id="tab-activity" onclick="switchTab('activity')">Activity</button>
+      <button class="view-tab"        id="tab-stats"    onclick="switchTab('stats')">Stats</button>
+    </div>
+    <button class="info-btn" onclick="document.getElementById('info-modal-backdrop').classList.add('open')" title="Links">&#9432;</button>
   </header>
 
+  <div class="info-modal-backdrop" id="info-modal-backdrop" onclick="if(event.target===this)this.classList.remove('open')">
+    <div class="info-modal">
+      <button class="info-modal-close" onclick="document.getElementById('info-modal-backdrop').classList.remove('open')">&times;</button>
+      <h2>tombot1234</h2>
+      <a class="info-link-row" href="https://lichess.org/@/tombot1234/tv" target="_blank">
+        <span class="info-link-icon">&#128249;</span> Watch live on Lichess
+      </a>
+      <a class="info-link-row" href="https://lichess.org/?user=tombot1234#friend" target="_blank">
+        <span class="info-link-icon">&#9822;</span> Send a challenge
+      </a>
+      <a class="info-link-row" href="https://github.com/tcberkley/ChessBot" target="_blank">
+        <span class="info-link-icon">&#128025;</span> GitHub source
+      </a>
+    </div>
+  </div>
+
   <div id="game-view" style="display:none">
+    <div id="no-game-msg" style="display:none;min-height:320px;align-items:center;justify-content:center;flex-direction:column;gap:0">
+      <div style="font-size:5rem;line-height:1;opacity:0.15;user-select:none">&#9822;</div>
+      <div style="font-size:1.25rem;font-weight:600;color:#c8d0f0;margin-top:20px;letter-spacing:0.01em">Waiting for a game</div>
+      <div style="font-size:0.88rem;color:#4a5070;margin-top:6px">tombot1234 is online and ready</div>
+      <a href="https://lichess.org/?user=tombot1234#friend" target="_blank" rel="noopener"
+         style="display:inline-flex;align-items:center;gap:8px;margin-top:28px;padding:11px 28px;background:#1a2744;border:1px solid #3498db;border-radius:8px;color:#3498db;font-size:0.95rem;font-weight:600;text-decoration:none;transition:all 0.18s;letter-spacing:0.01em"
+         onmouseover="this.style.background='#1e3060';this.style.color='#5ab4f0';this.style.borderColor='#5ab4f0'"
+         onmouseout="this.style.background='#1a2744';this.style.color='#3498db';this.style.borderColor='#3498db'">
+        &#9878;&nbsp; Challenge on Lichess
+      </a>
+    </div>
+    <div id="game-content">
     <div class="main-grid">
       <div class="board-col">
         <div class="eval-bar-wrap">
@@ -908,6 +993,7 @@ header h1 { font-size: 1.4rem; font-weight: 600; color: #e8e8f0; }
 
         <div class="card">
           <div class="card-title">Engine Stats</div>
+          <div class="table-scroll">
           <table class="stats-table">
             <thead>
               <tr>
@@ -925,9 +1011,11 @@ header h1 { font-size: 1.4rem; font-weight: 600; color: #e8e8f0; }
               </tr>
             </tbody>
           </table>
+          </div>
         </div>
 
       </div>
+    </div>
     </div>
   </div>
 
@@ -935,16 +1023,17 @@ header h1 { font-size: 1.4rem; font-weight: 600; color: #e8e8f0; }
     <!-- Stat cards row (always visible) -->
     <div id="idle-stats-row"></div>
 
-    <!-- Tab buttons -->
-    <div class="view-tabs" style="margin-top:16px">
-      <button class="view-tab active" id="tab-activity" onclick="switchTab('activity')">Activity</button>
-      <button class="view-tab" id="tab-stats" onclick="switchTab('stats')">Stats</button>
-    </div>
-
     <!-- Activity panel -->
     <div id="panel-activity">
       <div class="card">
         <div class="card-title">Activity</div>
+        <div id="activity-filter-bar" style="display:flex;gap:6px;margin-bottom:12px;flex-wrap:wrap">
+          <button class="view-tab active" id="af-all"      onclick="setActivityFilter('all')">All</button>
+          <button class="view-tab"        id="af-games"    onclick="setActivityFilter('games')">Games</button>
+          <button class="view-tab"        id="af-outgoing" onclick="setActivityFilter('outgoing')">Outgoing</button>
+          <button class="view-tab"        id="af-incoming" onclick="setActivityFilter('incoming')">Incoming</button>
+        </div>
+        <div class="table-scroll">
         <table class="challenge-table" id="challenge-table">
           <thead>
             <tr>
@@ -954,6 +1043,7 @@ header h1 { font-size: 1.4rem; font-weight: 600; color: #e8e8f0; }
           </thead>
           <tbody id="challenge-tbody"></tbody>
         </table>
+        </div>
         <div id="challenge-empty" style="display:none;color:#445;font-size:0.85rem;padding:16px 0;text-align:center">
           No activity yet
         </div>
@@ -996,9 +1086,12 @@ document.head.appendChild(_hs);
 
 // ── State ───────────────────────────────────────────────────────────────────
 let board = null;
-let activeTab = "activity";
+let gameState = "idle";
+let prevGameState = "idle";
+let activeTab = "game";
 let lastIdleState = null;
 let sparklineTC = "all";
+let activityFilter = "all";
 let clockInterval = null;
 let wtime_ms = 0, btime_ms = 0;
 let currentTurn = "white";
@@ -1124,13 +1217,50 @@ function computeCaptures(fen) {
 }
 
 // ── Tab switching ────────────────────────────────────────────────────────────
+function applyTabView() {
+  const isGame     = activeTab === "game";
+  const isActivity = activeTab === "activity";
+  const isStats    = activeTab === "stats";
+
+  document.getElementById("game-view").style.display   = isGame ? "block" : "none";
+  document.getElementById("idle-screen").style.display = isGame ? "none"  : "block";
+
+  document.getElementById("no-game-msg").style.display  = (isGame && gameState === "idle")   ? "flex" : "none";
+  document.getElementById("game-content").style.display = (isGame && gameState === "active") ? "block" : "none";
+
+  if (!isGame) {
+    document.getElementById("panel-activity").style.display = isActivity ? "block" : "none";
+    document.getElementById("panel-stats").style.display    = isStats    ? "block" : "none";
+    if (isStats && lastIdleState) renderStats(lastIdleState);
+  }
+}
+
 function switchTab(tab) {
   activeTab = tab;
-  document.getElementById("tab-activity").classList.toggle("active", tab === "activity");
-  document.getElementById("tab-stats").classList.toggle("active", tab === "stats");
-  document.getElementById("panel-activity").style.display = tab === "activity" ? "block" : "none";
-  document.getElementById("panel-stats").style.display    = tab === "stats"    ? "block" : "none";
-  if (tab === "stats" && lastIdleState) renderStats(lastIdleState);
+  ["game", "activity", "stats"].forEach(function(t) {
+    document.getElementById("tab-" + t).classList.toggle("active", t === tab);
+  });
+  applyTabView();
+}
+
+// ── Activity filter ──────────────────────────────────────────────────────────
+function setActivityFilter(f) {
+  activityFilter = f;
+  ["all","games","outgoing","incoming"].forEach(function(k) {
+    document.getElementById("af-" + k).classList.toggle("active", k === f);
+  });
+  if (lastIdleState) updateIdleContent(lastIdleState);
+}
+
+// ── Streak helper ─────────────────────────────────────────────────────────────
+function computeStreak(games) {
+  if (!games || games.length === 0) return {count: 0, type: null};
+  let count = 1, type = games[0].event;
+  for (let i = 1; i < games.length; i++) {
+    if (games[i].event === type) count++;
+    else break;
+  }
+  return {count: count, type: type};
 }
 
 // ── Stats panel ──────────────────────────────────────────────────────────────
@@ -1211,17 +1341,13 @@ function renderStats(s) {
     + " &nbsp;|&nbsp; " + total + " games</div>";
 
   // Streak
-  let streak = 0, streakType = null;
-  for (let i = 0; i < games.length; i++) {
-    const e = games[i].event;
-    if (i === 0) { streakType = e; streak = 1; }
-    else if (e === streakType) streak++;
-    else break;
-  }
-  const streakCol = streakType === "win" ? "#2ecc71" : streakType === "loss" ? "#e74c3c" : "#888";
+  const sk = computeStreak(games);
+  const streakCol = sk.type === "win" ? "#2ecc71" : sk.type === "loss" ? "#e74c3c" : "#888";
+  const skPlural  = sk.type === "loss" ? "losses" : (sk.type + "s");
+  const skLabel   = sk.count > 1 ? skPlural : sk.type;
   document.getElementById("record-bar-wrap").innerHTML +=
     "<div style='margin-top:6px;font-size:0.8rem;color:#6878a8'>Current streak: "
-    + "<span style='color:" + streakCol + ";font-weight:700'>" + streak + " " + streakType + (streak > 1 ? "s" : "") + "</span></div>";
+    + "<span style='color:" + streakCol + ";font-weight:700'>" + sk.count + " " + skLabel + "</span></div>";
 
   // By time control
   const byTC = {};
@@ -1274,42 +1400,48 @@ function setSparklineTC(tc) {
 }
 
 // ── Render ───────────────────────────────────────────────────────────────────
-function statCard(label, value, sub) {
+function statCard(label, value, sub, valueColor) {
   const val = value != null ? String(value) : "—";
+  const style = valueColor ? " style='color:" + valueColor + "'" : "";
   const subHtml = sub != null ? "<div class='idle-stat-sub'>" + sub + "</div>" : "";
   return "<div class='idle-stat-card'>"
        + "<div class='idle-stat-label'>" + label + "</div>"
-       + "<div class='idle-stat-value'>" + val + "</div>"
+       + "<div class='idle-stat-value'" + style + ">" + val + "</div>"
        + subHtml + "</div>";
 }
 
-function renderIdle(s) {
-  stopClock();
-  lastClockWtime = -1; lastClockBtime = -1; lastClockTurn = null;
-  lastIdleState = s;
-  document.getElementById("game-view").style.display = "none";
-  document.getElementById("idle-screen").style.display = "block";
-  document.getElementById("status-dot").classList.remove("live");
-  document.getElementById("bot-name-text").textContent = "—";
-  document.getElementById("opponent-name-text").textContent = "—";
-  document.getElementById("bot-captures").textContent = "";
-  document.getElementById("opp-captures").textContent = "";
-
+function updateIdleContent(s) {
   // Profile stats
   const p = s && s.profile;
-  const daily = s && s.daily_sent;
+  const dc = s && s.daily_counts;
+  const games_all = (s && s.activity || []).filter(function(r) { return r.row_type === "game"; });
+  const sk = computeStreak(games_all);
+  const streakPlural = sk.type === "loss" ? "losses" : (sk.type + "s");
+  const streakVal = sk.count > 0 ? sk.count + " " + (sk.count > 1 ? streakPlural : sk.type) : "—";
+  const streakColor = sk.type === "win" ? "#2ecc71" : sk.type === "loss" ? "#e74c3c" : null;
   const statsRow = document.getElementById("idle-stats-row");
   statsRow.innerHTML = [
     statCard("Bullet",  p && p.bullet_rating,  p ? p.bullet_games + " games" : null),
     statCard("Blitz",   p && p.blitz_rating,   p ? p.blitz_games  + " games" : null),
     statCard("Rapid",   p && p.rapid_rating,   p ? p.rapid_games  + " games" : null),
     statCard("Total Games", p && p.nb_games,
-             p ? p.nb_wins + "W / " + p.nb_draws + "D / " + p.nb_losses + "L" : null),
-    statCard("Challenges Today", daily != null ? daily + " / 250" : null, "daily limit"),
+             p ? p.nb_wins + "W " + p.nb_draws + "D " + p.nb_losses + "L" : null),
+    statCard("Challenges", dc && dc.challenges != null ? dc.challenges : null, "of 250 today"),
+    statCard("Games Today", dc && dc.games != null ? dc.games : null, null),
+    statCard("Streak", sk.count > 0 ? streakVal : "—", null, streakColor),
   ].join("");
 
-  // Activity feed (games + challenges merged)
-  const rows = s && s.activity;
+  // Activity feed — use full challenges list for direction filters so games don't crowd them out
+  let rows;
+  if (activityFilter === "outgoing") {
+    rows = (s && s.challenges || []).filter(function(r) { return r.direction === "outgoing"; });
+  } else if (activityFilter === "incoming") {
+    rows = (s && s.challenges || []).filter(function(r) { return r.direction === "incoming"; });
+  } else if (activityFilter === "games") {
+    rows = (s && s.activity || []).filter(function(r) { return r.row_type === "game"; });
+  } else {
+    rows = s && s.activity;
+  }
   const tbody = document.getElementById("challenge-tbody");
   const empty = document.getElementById("challenge-empty");
   if (!rows || rows.length === 0) {
@@ -1318,7 +1450,12 @@ function renderIdle(s) {
   } else {
     empty.style.display = "none";
     tbody.innerHTML = rows.map(function(r) {
-      const ts  = r.timestamp_utc ? r.timestamp_utc.slice(11,19) : "";
+      const ts  = r.timestamp_utc ? (function(s) {
+        try {
+          return new Date(s.replace(" ","T") + "Z").toLocaleTimeString("en-US",
+            {timeZone:"America/New_York", hour:"numeric", minute:"2-digit", hour12:true});
+        } catch(e) { return s.slice(11,16); }
+      })(r.timestamp_utc) : "";
       const tc  = r.time_control  || "—";
       const rat = r.opponent_rating != null ? r.opponent_rating : "—";
 
@@ -1327,7 +1464,7 @@ function renderIdle(s) {
         const dirEl  = "<span class='ch-dir-game'>\u265f</span>";
         const evtEl  = "<span class='ch-game-" + r.event + "'>" + r.event + "</span>";
         const oppEl  = "<a href='" + url + "' target='_blank' class='activity-link'>"
-                     + (r.opponent || "—") + " \u2197</a>";
+                     + (r.opponent || "—") + "</a>";
         const diff   = r.rating_diff;
         const infoEl = diff != null
           ? "<span class='" + (diff >= 0 ? "ch-rating-pos" : "ch-rating-neg") + "'>"
@@ -1340,10 +1477,13 @@ function renderIdle(s) {
         const dir    = r.direction === "outgoing" ? "outgoing" : "incoming";
         const evt    = r.event || "";
         const cls    = "ch-" + dir.slice(0,3) + "-" + evt;
-        const dirEl  = "<span class='ch-dir-" + dir.slice(0,3) + "'>"
-                     + (dir === "outgoing" ? "\u2192" : "\u2190") + "</span>";
+        const dirEl  = dir === "outgoing"
+          ? "<span class='dir-badge dir-out'>OUT</span>"
+          : "<span class='dir-badge dir-in'>IN</span>";
         const evtEl  = "<span class='" + cls + "'>" + evt + "</span>";
-        const opp    = r.opponent || "—";
+        const isBot  = r.opponent_is_bot === "True" || r.opponent_is_bot === true;
+        const botBadge = isBot ? "<span class='bot-badge'>BOT</span>" : "";
+        const opp    = (r.opponent || "—") + botBadge;
         const reason = r.decline_reason || "";
         return "<tr><td>" + ts + "</td><td>" + dirEl + "</td><td>" + evtEl
              + "</td><td>" + opp + "</td><td>" + rat + "</td><td>" + tc
@@ -1352,15 +1492,10 @@ function renderIdle(s) {
     }).join("");
   }
 
-  // Re-render stats panel if it's currently visible
   if (activeTab === "stats" && s) renderStats(s);
 }
 
-function renderUpdate(s) {
-  document.getElementById("game-view").style.display = "block";
-  document.getElementById("idle-screen").style.display = "none";
-  document.getElementById("status-dot").classList.add("live");
-
+function updateGameContent(s) {
   const g = s.game, pos = s.position, clk = s.clock, eng = s.engine, sf = s.sf;
 
   // Game info
@@ -1391,11 +1526,9 @@ function renderUpdate(s) {
   // Material captured
   try {
     const caps = computeCaptures(pos.fen);
-    // bot-captures: pieces bot captured = opponent color pieces gone
     const botIsWhite = s.bot_color === "white";
     const botCaps = botIsWhite ? caps.b : caps.w;
     const oppCaps = botIsWhite ? caps.w : caps.b;
-    // advantage: positive = white ahead; convert to bot's perspective
     const botAdv = botIsWhite ? caps.advantage : -caps.advantage;
     document.getElementById("bot-captures").textContent =
       botCaps + (botAdv > 0 ? " +" + botAdv : "");
@@ -1403,7 +1536,7 @@ function renderUpdate(s) {
       oppCaps + (botAdv < 0 ? " +" + (-botAdv) : "");
   } catch(e) {}
 
-  // Clocks — only restart ticker if values changed (avoids reset on engine-stats-only SSE pushes)
+  // Clocks — only restart ticker if values changed
   if (clk.wtime_ms !== lastClockWtime || clk.btime_ms !== lastClockBtime || clk.turn !== lastClockTurn) {
     wtime_ms = clk.wtime_ms;
     btime_ms = clk.btime_ms;
@@ -1422,14 +1555,17 @@ function renderUpdate(s) {
   botEl.textContent = fmtCp(botCp, botMate);
   botEl.className   = "eval-value " + cpClass(botCp, botMate);
 
-  // SF eval
+  // SF eval (stored from white's POV — flip sign for color when bot is black)
   const sfEl = document.getElementById("sf-eval");
-  sfEl.textContent = sf ? fmtCp(sf.cp, sf.mate) : "—";
-  sfEl.className   = "eval-value " + (sf ? cpClass(sf.cp, sf.mate) : "");
+  const sfCpBot   = sf && s.bot_color === "black" ? (sf.cp != null ? -sf.cp : null) : (sf ? sf.cp : null);
+  const sfMateBot = sf && s.bot_color === "black" ? (sf.mate != null ? -sf.mate : null) : (sf ? sf.mate : null);
+  sfEl.textContent = sf ? fmtCp(sfCpBot, sfMateBot) : "—";
+  sfEl.className  = "eval-value " + (sf ? cpClass(sfCpBot, sfMateBot) : "");
 
-  // Eval bar — botCp is from bot's perspective (positive = bot winning)
-  // bar fills from bottom = bot's side; use directly without negation
-  document.getElementById("eval-bar").style.height = evalToPercent(botCp, botMate) + "%";
+  // Eval bar — eng.cp is from side-to-move's POV; convert to white's POV for the bar
+  const barCp   = (botCp   != null && s.bot_color === "black") ? -botCp   : botCp;
+  const barMate = (botMate != null && s.bot_color === "black") ? -botMate : botMate;
+  document.getElementById("eval-bar").style.height = evalToPercent(barCp, barMate) + "%";
 
   // Engine stats
   document.getElementById("st-depth").textContent  = eng && eng.depth  != null ? eng.depth  : "—";
@@ -1440,6 +1576,43 @@ function renderUpdate(s) {
   document.getElementById("st-time").textContent   = eng && eng.time_ms != null ? eng.time_ms.toFixed(2) + "s" : "—";
   document.getElementById("st-tbhits").textContent = eng ? fmtNodes(eng.tbhits) : "—";
   document.getElementById("st-source").textContent = eng && eng.source  ? eng.source  : "—";
+}
+
+function renderIdle(s) {
+  document.getElementById("status-dot").classList.remove("live");
+  gameState = "idle";
+  prevGameState = "idle";
+
+  stopClock();
+  lastClockWtime = -1; lastClockBtime = -1; lastClockTurn = null;
+
+  document.getElementById("bot-name-text").textContent = "—";
+  document.getElementById("opponent-name-text").textContent = "—";
+  document.getElementById("bot-captures").textContent = "";
+  document.getElementById("opp-captures").textContent = "";
+
+  lastIdleState = s;
+  updateIdleContent(s);
+  applyTabView();
+}
+
+function renderUpdate(s) {
+  document.getElementById("status-dot").classList.add("live");
+  gameState = "active";
+
+  // Auto-switch to game tab when game starts
+  if (prevGameState === "idle") {
+    activeTab = "game";
+    ["game","activity","stats"].forEach(function(t) {
+      document.getElementById("tab-" + t).classList.toggle("active", t === "game");
+    });
+  }
+  prevGameState = "active";
+
+  lastIdleState = s;
+  updateIdleContent(s);
+  applyTabView();        // make #game-content visible before initBoard reads offsetWidth
+  updateGameContent(s);
 }
 
 // ── SSE connection ───────────────────────────────────────────────────────────
