@@ -3857,6 +3857,7 @@ static inline int is_tt_move_valid(int move)
     int piece = get_move_piece(move);
     int from  = get_move_source(move);
     int to    = get_move_target(move);
+    if (piece > k) return 0;  // bounds check: valid piece indices are 0-11 (k=11)
     // Piece must belong to the side to move (white pieces 0-5, black pieces 6-11)
     if (((piece >= p) ? black : white) != side) return 0;
     // Piece must actually be on the source square
@@ -4804,7 +4805,7 @@ static int allocate_time(int my_time_ms, int my_inc_ms, int move_number, int the
     // Panic mode: low time with no increment — make very fast moves to survive
     if (my_inc_ms == 0 && my_time_ms < 10000) {
         int budget = my_time_ms / 30;   // plan for 30 more moves
-        if (budget < 50)  budget = 50;  // floor: need a minimal search
+        if (budget < 50)  budget = (my_time_ms > 50) ? 50 : my_time_ms / 3;  // floor: bounded by available time
         if (budget > 250) budget = 250; // cap: never spend >250ms when desperate
         return budget;
     }
