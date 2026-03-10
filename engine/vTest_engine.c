@@ -2540,6 +2540,7 @@ static inline void generate_moves(moves *move_list)
 
 // leaf nodes (number of positions reached during the test of the move generator at a given depth)
 __thread U64 nodes;
+__thread U64 tb_hits;
 
 // perft driver
 static inline void perft_driver(int depth)
@@ -3599,15 +3600,7 @@ static inline int evaluate_side(int color, int phase, int pawn_score_in, U64 own
                 pop_bit(epb, esq);
             }
             U64 undefended = attacked & ~ep_atk;
-            while (undefended) {
-                int sq = get_ls1b_index(undefended);
-                int pval = 0;
-                if (get_bit(bitboards[en], sq) || get_bit(bitboards[eb], sq)) pval = 300;
-                else if (get_bit(bitboards[er], sq)) pval = 500;
-                else if (get_bit(bitboards[eq], sq)) pval = 900;
-                score += pval / 10;  // N/B=30, R=50, Q=90 cp per threat
-                pop_bit(undefended, sq);
-            }
+            score += count_bits(undefended) * TP_THREAT_ATK;
         }
     }
 
@@ -3741,7 +3734,7 @@ static inline int evaluate()
         int scale = 128;
 
         // Opposite-color bishops (no other major pieces)
-        if (wb==1 && bb2==1 && wr==0 && br==0 && wq==0 && bq==0) {
+        if (wb==1 && bb2==1 && wn==0 && bn==0 && wr==0 && br==0 && wq==0 && bq==0) {
             int wsq = get_ls1b_index(bitboards[B]);
             int bsq = get_ls1b_index(bitboards[b]);
             if (((wsq ^ bsq) & 1) != 0)   // opposite color squares
@@ -3865,6 +3858,7 @@ static inline int is_tt_move_valid(int move)
     int piece = get_move_piece(move);
     int from  = get_move_source(move);
     int to    = get_move_target(move);
+    if (piece > k) return 0;  // bounds check: valid piece indices are 0-11 (k=11)
     // Piece must belong to the side to move (white pieces 0-5, black pieces 6-11)
     if (((piece >= p) ? black : white) != side) return 0;
     // Piece must actually be on the source square
@@ -3912,8 +3906,8 @@ static inline void write_hash_entry(int score, int depth, int flag, int best_mov
     for (int i = 0; i < TT_CLUSTER_SIZE; i++) {
         tt_entry *entry = &cluster->entries[i];
         if (entry->hash32 == hash32) {
-            // Found this position's slot. Update if new depth >= stored, or always for exact.
-            if (depth >= (int)entry->depth || flag == HASH_FLAG_EXACT) {
+            // Found this position's slot. Update if new depth >= stored.
+            if (depth >= (int)entry->depth) {
                 replace = entry;
             } else {
                 // Shallower non-exact result: just refresh the best_move if we have one
@@ -4205,13 +4199,6 @@ static inline int quiescence(int alpha, int beta)
     if (ply > max_ply - 1)
         return evaluate();
 
-    // v18: Lazy eval guard — skip full evaluate() if material is clearly outside window
-    {
-        int lazy = evaluate_lazy();
-        if (lazy + 350 < alpha) return alpha;
-        if (lazy - 350 > beta)  return beta;
-    }
-
     int stand_pat = evaluate();
 
     if (stand_pat >= beta)
@@ -4234,8 +4221,8 @@ static inline int quiescence(int alpha, int beta)
         pick_best_move(move_list, move_scores, count);
         int move = move_list->moves[count];
 
-        // Skip non-captures (captures sorted first, so break when we hit a quiet)
-        if (!get_move_capture(move)) break;
+        // Skip non-captures unless it's a quiet queen promotion
+        if (!get_move_capture(move) && get_move_promoted(move) != Q) continue;
 
         // SEE filter: skip captures that lose material (e.g. QxP defended by pawn)
         {
@@ -4351,6 +4338,7 @@ static inline int negamax(int alpha, int beta, int depth, int null_ok)
             (side == white)
         );
         if (wdl != TB_RESULT_FAILED) {
+            tb_hits++;
             int score;
             switch (wdl) {
                 case TB_WIN:          score =  mate_value - ply - 1; break;
@@ -4375,8 +4363,8 @@ static inline int negamax(int alpha, int beta, int depth, int null_ok)
     if (depth <= 0)
         return quiescence(alpha, beta);
 
-    // Max ply overflow
-    if (ply > max_ply - 1)
+    // Max ply overflow (>= prevents pv_table[ply+1] OOB at ply=63)
+    if (ply >= max_ply - 1)
         return evaluate();
 
 #ifndef TUNER
@@ -4588,8 +4576,10 @@ static inline int negamax(int alpha, int beta, int depth, int null_ok)
                 if (tt_score >= beta) {
                     write_hash_entry(beta, depth, HASH_FLAG_BETA, tt_best_move);
                     if (!is_tt_cap) {
-                        killer_moves[1][ply] = killer_moves[0][ply];
-                        killer_moves[0][ply] = tt_best_move;
+                        if (tt_best_move != killer_moves[0][ply]) {
+                            killer_moves[1][ply] = killer_moves[0][ply];
+                            killer_moves[0][ply] = tt_best_move;
+                        }
                         if (cm_piece) countermove[cm_piece][cm_to] = tt_best_move;
                         if (cm_piece) {
                             int cb = depth * depth;
@@ -4696,7 +4686,7 @@ static inline int negamax(int alpha, int beta, int depth, int null_ok)
                 if (cm_piece)
                     reduction -= cont_hist[cm_piece][cm_to][get_move_piece(move)][get_move_target(move)] / 16384;
                 if (reduction < 0) reduction = 0;
-                if (reduction > depth - 1) reduction = depth - 1;
+                if (reduction > depth - 2) reduction = depth - 2;
                 // Don't reduce if move gives check
                 if (is_in_check()) reduction = 0;
             }
@@ -4742,8 +4732,10 @@ static inline int negamax(int alpha, int beta, int depth, int null_ok)
 
                     if (!is_capture) {
                         // Killer moves
-                        killer_moves[1][ply] = killer_moves[0][ply];
-                        killer_moves[0][ply] = move;
+                        if (move != killer_moves[0][ply]) {
+                            killer_moves[1][ply] = killer_moves[0][ply];
+                            killer_moves[0][ply] = move;
+                        }
                         // Countermove heuristic
                         if (cm_piece)
                             countermove[cm_piece][cm_to] = move;
@@ -4770,15 +4762,9 @@ static inline int negamax(int alpha, int beta, int depth, int null_ok)
 
         // History malus: penalize quiet moves that fail to improve alpha
         if (!is_capture && !is_promotion && score <= alpha) {
-            int malus = depth * depth;
+            int malus = depth * depth / 2;
             int *h = &history_moves[get_move_piece(move)][get_move_target(move)];
             *h -= malus + *h * malus / 16384;
-            // Continuation history malus (symmetric with cont_hist bonus)
-            if (cm_piece) {
-                short *ch = &cont_hist[cm_piece][cm_to][get_move_piece(move)][get_move_target(move)];
-                int ch_val = (int)*ch - malus - (int)*ch * malus / 16384;
-                *ch = (short)(ch_val > 32767 ? 32767 : (ch_val < -32768 ? -32768 : ch_val));
-            }
         }
     }
 
@@ -4818,7 +4804,7 @@ static int allocate_time(int my_time_ms, int my_inc_ms, int move_number, int the
     // Panic mode: low time with no increment — make very fast moves to survive
     if (my_inc_ms == 0 && my_time_ms < 10000) {
         int budget = my_time_ms / 30;   // plan for 30 more moves
-        if (budget < 50)  budget = 50;  // floor: need a minimal search
+        if (budget < 50)  budget = (my_time_ms > 50) ? 50 : my_time_ms / 3;  // floor: bounded by available time
         if (budget > 250) budget = 250; // cap: never spend >250ms when desperate
         return budget;
     }
@@ -4899,6 +4885,7 @@ static void* worker_thread(void* arg) {
 
     // Per-thread search state reset
     nodes = 0;
+    tb_hits = 0;
     prev_move_piece = 0;
     prev_move_to = 0;
     se_excluded_move = 0;
@@ -4924,6 +4911,7 @@ void search_position(int max_depth, int time_budget_ms)
 {
     // Reset
     nodes = 0;
+    tb_hits = 0;
     v14_stopped = 0;
     stopped = 0;
     v14_search_start = get_time_ms();
@@ -5132,14 +5120,14 @@ void search_position(int max_depth, int time_budget_ms)
         if (elapsed < 1) elapsed = 1;
 
         if (score > -mate_value && score < -mate_score)
-            printf("info score mate %d depth %d nodes %lld time %ld pv ",
-                   -(score + mate_value) / 2 - 1, current_depth, nodes, elapsed);
+            printf("info score mate %d depth %d nodes %lld time %ld tbhits %llu pv ",
+                   -(score + mate_value) / 2 - 1, current_depth, nodes, elapsed, tb_hits);
         else if (score > mate_score && score < mate_value)
-            printf("info score mate %d depth %d nodes %lld time %ld pv ",
-                   (mate_value - score) / 2 + 1, current_depth, nodes, elapsed);
+            printf("info score mate %d depth %d nodes %lld time %ld tbhits %llu pv ",
+                   (mate_value - score) / 2 + 1, current_depth, nodes, elapsed, tb_hits);
         else
-            printf("info score cp %d depth %d nodes %lld time %ld pv ",
-                   score, current_depth, nodes, elapsed);
+            printf("info score cp %d depth %d nodes %lld time %ld tbhits %llu pv ",
+                   score, current_depth, nodes, elapsed, tb_hits);
 
         for (int i = 0; i < pv_length[0]; i++) {
             print_move(pv_table[0][i]);
@@ -5448,36 +5436,33 @@ static int try_opening_book()
     if (fullmove_number != 1) return 0;
 
     if (side == white) {
-        // Randomly play e4 or d4
-        srand(get_time_ms());
-        int choice = rand() % 2;
-        char *move_str = choice ? "e2e4" : "d2d4";
-        int move = parse_move(move_str);
+        // c4 (English) is the bot's best-performing first move (58% win rate)
+        int move = parse_move("c2c4");
         if (move) {
-            printf("bestmove %s\n", move_str);
+            printf("bestmove c2c4\n");
             fflush(stdout);
             return 1;
         }
     } else {
-        // Respond to e4 with e5, d4 with d5
-        // Check if white pawn is on e4 (square e4 in BBC = rank 4, file 4 = sq 36)
+        // vs e4 (white pawn on e4 = BBC sq 36) → e5
         if (get_bit(bitboards[P], 36) && !get_bit(bitboards[P], 12)) {
-            // e4 was played, respond with e5
             int move = parse_move("e7e5");
-            if (move) {
-                printf("bestmove e7e5\n");
-                fflush(stdout);
-                return 1;
-            }
+            if (move) { printf("bestmove e7e5\n"); fflush(stdout); return 1; }
         }
+        // vs d4 (white pawn on d4 = BBC sq 35) → d5
         if (get_bit(bitboards[P], 35) && !get_bit(bitboards[P], 11)) {
-            // d4 was played, respond with d5
             int move = parse_move("d7d5");
-            if (move) {
-                printf("bestmove d7d5\n");
-                fflush(stdout);
-                return 1;
-            }
+            if (move) { printf("bestmove d7d5\n"); fflush(stdout); return 1; }
+        }
+        // vs c4 (white pawn on c4 = BBC sq 34) → e5
+        if (get_bit(bitboards[P], 34) && !get_bit(bitboards[P], 10)) {
+            int move = parse_move("e7e5");
+            if (move) { printf("bestmove e7e5\n"); fflush(stdout); return 1; }
+        }
+        // vs Nf3 (white knight on f3 = BBC sq 45) → d5
+        if (get_bit(bitboards[N], 45)) {
+            int move = parse_move("d7d5");
+            if (move) { printf("bestmove d7d5\n"); fflush(stdout); return 1; }
         }
     }
     return 0;

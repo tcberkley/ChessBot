@@ -10,7 +10,7 @@ Do NOT read, write, or execute anything outside this tree without explicit user 
 - **Lichess bot**: `tombot1234` on Hetzner CPX11 (`178.156.243.29`, Ubuntu 24.04)
 - **Engine**: C (BBC magic bitboard), UCI, multi-threaded (Lazy SMP + pondering)
 - **Bridge**: Python `lichess-bot` in `bot/`
-- **Current deployed**: `v2.1_engine` (~2300 Elo)
+- **Current deployed**: `v2.2_engine` (~2300 Elo)
 - **Engine source**: `engine/` | **Fathom Syzygy lib**: `engine/fathom*.{h,c}` + `tbconfig.h` `tbchess.c` `stdendian.h`
 
 ---
@@ -54,12 +54,12 @@ make vTest_engine
 echo -e "position startpos\nperft 5" | ./vTest_engine | tail -3
 
 # 3. Tournament vs baseline (50 games, 100ms, 25 opening pairs)
-python3 tournament_v1.9.py --engine1 ./vTest_engine --engine2 ./v2.1_baseline \
+python3 tournament_v1.9.py --engine1 ./vTest_engine --engine2 ./v2.2_engine \
     --openings 25 --movetime 100 --seed 42 2>&1 | tail -8
 ```
 
 **Keep if**: perft = 4865609 AND tournament ≥ 48%. Revert immediately otherwise.
-**Baseline binary**: `engine/v2.1_baseline` (copy before adding features: `cp vX.Y_engine vX.Y_baseline`)
+**Baseline**: `engine/v2.2_engine` binary (copy before adding features: `cp vX.Y_engine vX.Y_baseline`)
 
 ### Perft Reference Values
 | Position | Depth | Nodes |
@@ -76,8 +76,8 @@ python3 tournament_v1.9.py --engine1 ./vTest_engine --engine2 ./v2.1_baseline \
 | Target | Source | Notes |
 |--------|--------|-------|
 | `vTest_engine` | `vTest_engine.c fathom.c` | Working test file — modify freely |
-| `v2.1_engine` | `v2.1_engine.c fathom.c` | Current deployed version |
-| `v2.1_tuner` | `v2.1_engine.c fathom.c` | `-DTUNER` |
+| `v2.2_engine` | `v2.2_engine.c fathom.c` | Current deployed version |
+| `v2.2_tuner` | `v2.2_engine.c fathom.c` | `-DTUNER` |
 | `vTest_tuner` | `vTest_engine.c` | `-DTUNER`, no fathom |
 
 Compile flags: `-O3 -march=native -fomit-frame-pointer -pthread`
@@ -99,6 +99,8 @@ Compile flags: `-O3 -march=native -fomit-frame-pointer -pthread`
 - `pv_length[0]` can be 0 even when `pv_table[0][0]` is valid (timer fires before length is set) — use `pv_table[0][0]` to check for valid best move
 - **Tempo bonus (+10)**: goes in the negamax futility block ONLY — NOT in `evaluate()` (breaks qsearch stand_pat)
 - `go infinite` does NOT stop mid-search (check_time doesn't read stdin by design)
+- **`score_move()` is shared** between negamax and qsearch — killers (900k) and countermoves (700k) are scored in both. In qsearch, killers sort above losing captures (500k), so the non-capture filter must use `continue` not `break` (otherwise killers trigger a full loop exit before reaching quiet promotions)
+- **Qsearch lazy eval guard removed** (v2.2): the old `evaluate_lazy() ± 350` guard was aborting before captures in positions where stand_pat + best capture > alpha. Delta pruning (`stand_pat + 900 < alpha`) is sufficient and already present
 
 ### Pondering
 - python-chess sends `go ponder wtime X btime Y` — detect with `strncmp(cmd,"go ponder",9)`
@@ -113,7 +115,7 @@ Compile flags: `-O3 -march=native -fomit-frame-pointer -pthread`
 - Fathom conversion: bitboards via `__builtin_bswap64()`, individual squares via `XOR 56`
 - Pawn shifts: white `>>9 & ~file_masks[7]` (not_h_file), `>>7 & ~file_masks[0]` (not_a_file); black opposite
 
-### Singular Extensions (v2.1)
+### Singular Extensions (v2.2)
 - SE margin: `se_tt_score - 8 * depth` (was 25)
 - Double extension: `se_score < se_beta - 50` → `se_extension = 2`
 - `se_extension` applied only to the TT pre-try search, not the main move loop
@@ -121,7 +123,7 @@ Compile flags: `-O3 -march=native -fomit-frame-pointer -pthread`
 
 ---
 
-## Key Search Parameters (v2.1)
+## Key Search Parameters (v2.2)
 
 | Feature | Value |
 |---------|-------|
@@ -136,6 +138,7 @@ Compile flags: `-O3 -march=native -fomit-frame-pointer -pthread`
 | Improving flag | `raw_eval > static_evals_by_ply[ply-2]` |
 | Correction history | CORR_SIZE=16384, CORR_GRAIN=256, CORR_MAX=1024 |
 | TT size | 64MB |
+| TT replacement | depth >= stored depth only (no EXACT free-eviction) |
 | Syzygy tables | `~/syzygy` on server (145 .rtbw + 145 .rtbz, ~680MB) |
 
 ---
@@ -157,6 +160,17 @@ Compile flags: `-O3 -march=native -fomit-frame-pointer -pthread`
 
 ---
 
+## To-Do / Features to Try
+
+| Feature | Notes |
+|---------|-------|
+| Pawn shield (rank-indexed, per-file) | Bonuses for pawns near castled king by rank/file; open-file-near-king penalties. Higher priority — likely explains losses to stronger engines |
+| Connected/chained pawn bonus | Bonus for pawns protecting each other (rank-indexed, 0→+44 range). We have isolated/doubled/backward but no chain bonus |
+| Backward pawns: open vs closed file | Currently flat penalty — split into separate open-file / closed-file penalties |
+| History aging | On each new search, divide history table by 16 to decay stale entries. Alternative to gravity; worth A/B testing |
+
+---
+
 ## Engine Version History
 
 | Version | Key additions | Est. Elo |
@@ -175,6 +189,7 @@ Compile flags: `-O3 -march=native -fomit-frame-pointer -pthread`
 | v1.11 | King area threats, rank-indexed passed pawn tables, inner/outer mobility, minor→heavy attack bonus; full Texel retune 781 params | ~2155 |
 | v2.0 | Syzygy WDL probing (fathom), root TB probe, mate-in-X chat, improving flag | ~2225 |
 | v2.1 | IIR, razoring 450, SE margin 8×depth, double extension, phase-aware futility | ~2300 |
+| v2.2 | Six correctness fixes: OCB scaling (wn==0&&bn==0 guard), qsearch lazy eval guard removed, qsearch break→continue, TT replacement (no EXACT free-eviction), killer dedup (×2 sites) | ~2300 |
 
 ---
 
@@ -183,7 +198,7 @@ Compile flags: `-O3 -march=native -fomit-frame-pointer -pthread`
 ```bash
 # On server — bot goes DOWN during tuning (run_tuner.py stops lichess-bot)
 # Compile tuner
-make v2.1_tuner   # -DTUNER flag disables correction history and pondering
+make v2.2_tuner   # -DTUNER flag disables correction history and pondering
 
 # Dataset: ~/c_rewrite/dataset_pgn.txt (1M quiet positions, Lichess DB ≥2000 Elo ≥3min)
 # Script:  engine/run_tuner.py  (emails hourly MSE plot)
@@ -209,7 +224,7 @@ After tuning: verify `perft 5 = 4865609`, run tournament, update `tp[]` array co
 ssh root@178.156.243.29 "journalctl -u lichess-bot -n 50 --no-pager"
 
 # Quick engine benchmark (Kiwipete depth 12)
-echo -e "position fen r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq -\ngo depth 12" | ./v2.1_engine
+echo -e "position fen r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq -\ngo depth 12" | ./v2.2_engine
 
 # Git workflow
 git add engine/vX.Y_engine.c engine/Makefile

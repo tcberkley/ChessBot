@@ -214,7 +214,7 @@ class EngineWrapper:
 
         self.add_comment(best_move, board)
         self.print_stats()
-        self.log_move_stats(game.id, len(board.move_stack))
+        self.log_move_stats(game.id, len(board.move_stack), best_move)
         if best_move.resigned and len(board.move_stack) >= 2:
             li.resign(game.id)
         else:
@@ -350,7 +350,7 @@ class EngineWrapper:
         for line in self.get_stats():
             logger.info(line)
 
-    def log_move_stats(self, game_id: str, move_num: int) -> None:
+    def log_move_stats(self, game_id: str, move_num: int, best_move=None) -> None:
         """Append per-move engine stats to game_stats.jsonl for dashboard analytics."""
         info = self.move_commentary[-1] if self.move_commentary else {}
         score = info.get("score")
@@ -371,6 +371,7 @@ class EngineWrapper:
             "tbhits": info.get("tbhits"),
             "time_ms": info.get("time"),
             "source": source,
+            "ponder_move": best_move.ponder.uci() if best_move and best_move.ponder else None,
         }
         try:
             with open("/root/lichess-bot-master/game_stats.jsonl", "a") as f:
