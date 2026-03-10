@@ -1481,18 +1481,6 @@ header h1 { font-size: 1.4rem; font-weight: 600; color: #e8e8f0; }
       <span id="sp-move-ticker" style="font-size:0.7rem;color:#6878a8;"></span>
     </div>
     <div id="sp-grid" class="sp-grid"></div>
-    <div id="sp-history">
-      <div id="sp-history-title">Game History</div>
-      <table>
-        <thead>
-          <tr>
-            <th>#</th><th>White</th><th>Black</th>
-            <th>Result</th><th>Moves</th><th>Time (UTC)</th>
-          </tr>
-        </thead>
-        <tbody id="sp-history-body"></tbody>
-      </table>
-    </div>
   </div>
 </div>
 
@@ -2132,13 +2120,13 @@ function buildMiniBoard(fen, lastMove) {
           var sq   = "abcdefgh"[f] + (8 - r);
           var lite = (f + r) % 2 === 0;
           var hlit = hi.has(sq);
-          html += "<div class=\"mini-sq " + (lite?"light":"dark") + (hlit?" hi":"") + "\"></div>";
+          html += '<div class="mini-sq ' + (lite?"light":"dark") + (hlit?" hi":"") + '"></div>';
         }
       } else {
         var sq   = "abcdefgh"[f] + (8 - r);
         var lite = (f + r) % 2 === 0;
         var hlit = hi.has(sq);
-        html += "<div class=\"mini-sq " + (lite?"light":"dark") + (hlit?" hi":"") + "\">"
+        html += '<div class="mini-sq ' + (lite?"light":"dark") + (hlit?" hi":"") + '">'
               + (SP_PIECES[ch]||"") + "</div>";
         f++;
       }
@@ -2153,8 +2141,8 @@ function renderSelfPlay(s) {
   prevGameState = "idle";
   stopClock();
 
-  document.getElementById("game-screen") && (document.getElementById("game-screen").style.display = "none");
-  document.getElementById("idle-screen").style.display     = "none";
+  document.getElementById("game-view").style.display        = "none";
+  document.getElementById("idle-screen").style.display      = "none";
   document.getElementById("self-play-screen").style.display = "block";
 
   var grid = document.getElementById("sp-grid");
@@ -2179,40 +2167,22 @@ function renderSelfPlay(s) {
                  : g.result === "0-1" ? g.black_label : null;
       var cls    = g.result === "1-0" ? "white-wins"
                  : g.result === "0-1" ? "black-wins" : "draw";
-      badge = "<span class=\"sp-result-badge " + cls + "\">" + (winner ? winner + " wins" : "Draw") + "</span>";
+      badge = '<span class="sp-result-badge ' + cls + '">' + (winner ? winner + " wins" : "Draw") + '</span>';
     }
 
     card.innerHTML =
-      "<div class=\"sp-card-header\">"
-      + "<span class=\"sp-matchup\">" + g.white_label + " <span style=\"color:#444\">vs</span> " + g.black_label + "</span>"
-      + (badge || "<span>" + g.move_count + "m</span>")
-      + "</div>"
-      + "<div class=\"mini-board\">" + buildMiniBoard(g.fen, g.last_move) + "</div>"
-      + "<div class=\"sp-score-row\">"
-      + "<span>" + g.white_label + " <span class=\"sp-score-val\">" + g.white_wins + "W</span></span>"
-      + "<span><span class=\"sp-score-val\">" + g.draws + "D</span></span>"
-      + "<span>" + g.black_label + " <span class=\"sp-score-val\">" + g.black_wins + "W</span></span>"
-      + "</div>";
+      '<div class="sp-card-header">'
+      + '<span class="sp-matchup">' + g.white_label + ' <span style="color:#444">vs</span> ' + g.black_label + '</span>'
+      + (badge || '<span>' + g.move_count + 'm</span>')
+      + '</div>'
+      + '<div class="mini-board">' + buildMiniBoard(g.fen, g.last_move) + '</div>'
+      + '<div class="sp-score-row">'
+      + '<span>' + g.white_label + ' <span class="sp-score-val">' + g.white_wins + 'W</span></span>'
+      + '<span><span class="sp-score-val">' + g.draws + 'D</span></span>'
+      + '<span>' + g.black_label + ' <span class="sp-score-val">' + g.black_wins + 'W</span></span>'
+      + '</div>';
   });
 
-  var tbody = document.getElementById("sp-history-body");
-  if (tbody && s.history) {
-    var rows = "";
-    s.history.forEach(function(h, i) {
-      var resCls = h.result === "1-0" ? "sp-res-w"
-                 : h.result === "0-1" ? "sp-res-b" : "sp-res-d";
-      var ts = h.ts ? h.ts.replace("T"," ").replace("Z","") : "\u2014";
-      rows += "<tr>"
-            + "<td>" + (s.history.length - i) + "</td>"
-            + "<td>" + h.white + "</td>"
-            + "<td>" + h.black + "</td>"
-            + "<td class=\"" + resCls + "\">" + h.result + "</td>"
-            + "<td>" + h.moves + "</td>"
-            + "<td style=\"color:#555\">" + ts + "</td>"
-            + "</tr>";
-    });
-    tbody.innerHTML = rows;
-  }
 }
 
 function renderIdle(s) {
@@ -2269,7 +2239,7 @@ function connect() {
       if      (s.type === "idle")      renderIdle(s);
       else if (s.type === "update")    renderUpdate(s);
       else if (s.type === "self_play") renderSelfPlay(s);
-    } catch(err) {}
+    } catch(err) { console.error("SSE render error:", err); }
   };
   es.onerror = function() {
     es.close();
