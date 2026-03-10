@@ -648,7 +648,7 @@ class SelfPlayManager:
                 done.wait(timeout=60)
                 if not self.stop_event.is_set():
                     time.sleep(SELF_PLAY_MOVE_PAUSE)
-            elif game.status == "finished":
+            elif game.status in ("finished", "error"):
                 time.sleep(2.5)
                 if not self.stop_event.is_set():
                     game.new_game()
@@ -669,12 +669,31 @@ class SelfPlayManager:
         except Exception:
             return []
 
+    @staticmethod
+    def _log_totals():
+        total_games, total_moves = 0, 0
+        try:
+            with open(SELF_PLAY_LOG_PATH) as f:
+                for line in f:
+                    try:
+                        e = json.loads(line)
+                        total_games += 1
+                        total_moves += e.get("moves", 0)
+                    except:
+                        pass
+        except Exception:
+            pass
+        return total_games, total_moves
+
     def _broadcast_loop(self):
         while not self.stop_event.is_set():
+            total_games, total_moves = self._log_totals()
             self.shared.update({
-                "type":    "self_play",
-                "games":   [g.to_state() for g in self.games],
-                "history": self._load_log(),
+                "type":        "self_play",
+                "games":       [g.to_state() for g in self.games],
+                "history":     self._load_log(),
+                "total_games": total_games,
+                "total_moves": total_moves,
             })
             time.sleep(SELF_PLAY_BROADCAST_SEC)
 
@@ -1201,49 +1220,105 @@ header h1 { font-size: 1.4rem; font-weight: 600; color: #e8e8f0; }
   text-transform: uppercase;
   letter-spacing: 0.06em;
 }
+#sp-idle-notice {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 0.72rem;
+  color: #6878a8;
+  margin-bottom: 12px;
+  background: #16213e;
+  border: 1px solid #2d2d54;
+  border-radius: 20px;
+  padding: 4px 12px 4px 10px;
+}
+.sp-idle-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: #4a5a8a; flex-shrink: 0;
+}
+#sp-idle-notice a {
+  color: #7c9ee8;
+  text-decoration: none;
+  font-weight: 600;
+}
+#sp-idle-notice a:hover { text-decoration: underline; }
 .sp-grid {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
-  gap: 12px;
+  gap: 8px;
+  align-items: start;
 }
 @media (max-width: 700px) { .sp-grid { grid-template-columns: repeat(2, 1fr); } }
 .sp-card {
   background: #16213e;
   border: 1px solid #2d2d54;
   border-radius: 8px;
-  padding: 8px;
+  padding: 5px;
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: 3px;
 }
-.sp-card-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  font-size: 0.65rem;
-  color: #6878a8;
+.sp-side-label {
+  font-size: 0.58rem;
+  font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.05em;
+  padding: 2px 3px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
-.sp-matchup { font-size: 0.65rem; color: #8898c8; font-weight: 600; }
+.sp-top-label    { color: #7888b8; }
+.sp-bottom-label { color: #9aa8cc; }
 .sp-result-badge {
   font-size: 0.6rem; font-weight: 700; padding: 1px 4px; border-radius: 3px;
 }
 .sp-result-badge.white-wins { background: #e8e8e8; color: #1a1a2e; }
 .sp-result-badge.black-wins { background: #2a2a3a; color: #c0c0d8; border: 1px solid #444; }
 .sp-result-badge.draw       { background: #4a4a6a; color: #c0c0d8; }
+.mini-board-wrap {
+  position: relative;
+  width: 100%;
+  padding-bottom: 100%;
+  flex-shrink: 0;
+  overflow: hidden;
+}
+.mini-board-wrap::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: #0d1020;
+  transform: translateX(-101%);
+  pointer-events: none;
+  z-index: 2;
+}
+.mini-board-wrap.wiping::after {
+  animation: sp-curtain 0.7s ease-in-out forwards;
+}
+@keyframes sp-curtain {
+  0%   { transform: translateX(-101%); }
+  38%  { transform: translateX(0%); }
+  62%  { transform: translateX(0%); }
+  100% { transform: translateX(101%); }
+}
 .mini-board {
+  position: absolute;
+  inset: 0;
   display: grid;
   grid-template-columns: repeat(8, 1fr);
-  width: 100%;
-  aspect-ratio: 1;
+  grid-template-rows: repeat(8, 1fr);
   border: 1px solid #2d2d54;
   border-radius: 2px;
   overflow: hidden;
 }
 .mini-sq {
   display: flex; align-items: center; justify-content: center;
-  font-size: clamp(8px, 1.8vw, 15px); line-height: 1; user-select: none;
+  user-select: none;
+}
+.mini-piece {
+  width: 82%; height: 82%; object-fit: contain;
+  display: block; pointer-events: none;
+  filter: drop-shadow(0 0 1px rgba(0,0,0,0.55));
 }
 .mini-sq.light { background: #f0d9b5; }
 .mini-sq.dark  { background: #b58863; }
@@ -1479,6 +1554,11 @@ header h1 { font-size: 1.4rem; font-weight: 600; color: #e8e8f0; }
     <div id="sp-header">
       <span id="sp-header-title">Self-Play Arena</span>
       <span id="sp-move-ticker" style="font-size:0.7rem;color:#6878a8;"></span>
+    </div>
+    <div id="sp-idle-notice">
+      <span class="sp-idle-dot"></span>
+      tombot1234 is not currently in a game &mdash;
+      <a href="https://lichess.org/?user=tombot1234#friend" target="_blank" rel="noopener">send a challenge ↗</a>
     </div>
     <div id="sp-grid" class="sp-grid"></div>
   </div>
@@ -2103,10 +2183,13 @@ function dismissResultOverlay() {
   document.getElementById("result-overlay").style.display = "none";
 }
 
+// ── Self-play state tracking ──────────────────────────────────────────────────
+var spPrevStatus = {};
+
 // ── Mini-board renderer ───────────────────────────────────────────────────────
-const SP_PIECES = {
-  K:"\u2654", Q:"\u2655", R:"\u2656", B:"\u2657", N:"\u2658", P:"\u2659",
-  k:"\u265a", q:"\u265b", r:"\u265c", b:"\u265d", n:"\u265e", p:"\u265f"
+const FEN_TO_IMG = {
+  K:'wK', Q:'wQ', R:'wR', B:'wB', N:'wN', P:'wP',
+  k:'bK', q:'bQ', r:'bR', b:'bB', n:'bN', p:'bP'
 };
 
 function buildMiniBoard(fen, lastMove) {
@@ -2129,8 +2212,8 @@ function buildMiniBoard(fen, lastMove) {
         var sq   = "abcdefgh"[f] + (8 - r);
         var lite = (f + r) % 2 === 0;
         var hlit = hi.has(sq);
-        html += '<div class="mini-sq ' + (lite?"light":"dark") + (hlit?" hi":"") + '">'
-              + (SP_PIECES[ch]||"") + "</div>";
+        var img = FEN_TO_IMG[ch] ? '<img src="/img/' + FEN_TO_IMG[ch] + '.png" class="mini-piece">' : '';
+        html += '<div class="mini-sq ' + (lite?"light":"dark") + (hlit?" hi":"") + '">' + img + "</div>";
         f++;
       }
     }
@@ -2149,9 +2232,14 @@ function renderSelfPlay(s) {
   var grid = document.getElementById("sp-grid");
   if (!grid) return;
 
-  var totalMoves = 0;
-  s.games.forEach(function(g) { totalMoves += g.move_count; });
-  document.getElementById("sp-move-ticker").textContent = totalMoves + " total moves";
+  function fmtNum(n) {
+    if (n >= 1e6) return (n / 1e6).toFixed(n >= 10e6 ? 1 : 2).replace(/\.?0+$/, '') + 'M';
+    if (n >= 1e3) return (n / 1e3).toFixed(n >= 10e3 ? 1 : 2).replace(/\.?0+$/, '') + 'K';
+    return String(n);
+  }
+  var totalGames = s.total_games || 0;
+  var totalMoves = s.total_moves || 0;
+  document.getElementById("sp-move-ticker").textContent = fmtNum(totalGames) + " games · " + fmtNum(totalMoves) + " moves";
 
   s.games.forEach(function(g) {
     var card = document.getElementById("sp-card-" + g.idx);
@@ -2171,17 +2259,23 @@ function renderSelfPlay(s) {
       badge = '<span class="sp-result-badge ' + cls + '">' + (winner ? winner + " wins" : "Draw") + '</span>';
     }
 
+    var prevSt = spPrevStatus[g.idx];
+    spPrevStatus[g.idx] = g.status;
+
     card.innerHTML =
-      '<div class="sp-card-header">'
-      + '<span class="sp-matchup">' + g.white_label + ' <span style="color:#444">vs</span> ' + g.black_label + '</span>'
-      + (badge || '<span>' + g.move_count + 'm</span>')
-      + '</div>'
-      + '<div class="mini-board">' + buildMiniBoard(g.fen, g.last_move) + '</div>'
-      + '<div class="sp-score-row">'
-      + '<span>' + g.white_label + ' <span class="sp-score-val">' + g.white_wins + 'W</span></span>'
-      + '<span><span class="sp-score-val">' + g.draws + 'D</span></span>'
-      + '<span>' + g.black_label + ' <span class="sp-score-val">' + g.black_wins + 'W</span></span>'
-      + '</div>';
+      '<div class="sp-side-label sp-top-label">' + g.black_label + '</div>'
+      + '<div class="mini-board-wrap"><div class="mini-board">' + buildMiniBoard(g.fen, g.last_move) + '</div></div>'
+      + '<div class="sp-side-label sp-bottom-label">' + (badge || g.white_label) + '</div>';
+
+    if (prevSt === 'finished' && g.status === 'playing') {
+      var wrap = card.querySelector('.mini-board-wrap');
+      if (wrap) {
+        wrap.classList.add('wiping');
+        wrap.addEventListener('animationend', function() {
+          wrap.classList.remove('wiping');
+        }, { once: true });
+      }
+    }
   });
 
 }
