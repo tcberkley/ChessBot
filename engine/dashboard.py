@@ -1509,6 +1509,7 @@ let board = null;
 let gameState = "idle";
 let prevGameState = "idle";
 let activeTab = "game";
+let selfPlayActive = false;
 let lastIdleState = null;
 let sparklineTC = "all";
 let activityFilter = "games";
@@ -1680,10 +1681,12 @@ function applyTabView() {
   const isActivity = activeTab === "activity";
   const isStats    = activeTab === "stats";
 
-  document.getElementById("game-view").style.display   = isGame ? "block" : "none";
+  const showSelfPlay = isGame && selfPlayActive;
+  document.getElementById("self-play-screen").style.display = showSelfPlay ? "block" : "none";
+  document.getElementById("game-view").style.display   = isGame && !showSelfPlay ? "block" : "none";
   document.getElementById("idle-screen").style.display = isGame ? "none"  : "block";
 
-  document.getElementById("no-game-msg").style.display  = (isGame && gameState === "idle")   ? "flex" : "none";
+  document.getElementById("no-game-msg").style.display  = (isGame && gameState === "idle" && !showSelfPlay) ? "flex" : "none";
   document.getElementById("game-content").style.display = (isGame && gameState === "active") ? "block" : "none";
 
   if (!isGame) {
@@ -2139,11 +2142,9 @@ function renderSelfPlay(s) {
   document.getElementById("status-dot").classList.remove("live");
   gameState = "idle";
   prevGameState = "idle";
+  selfPlayActive = true;
   stopClock();
-
-  document.getElementById("game-view").style.display        = "none";
-  document.getElementById("idle-screen").style.display      = "none";
-  document.getElementById("self-play-screen").style.display = "block";
+  applyTabView();
 
   var grid = document.getElementById("sp-grid");
   if (!grid) return;
@@ -2188,7 +2189,7 @@ function renderSelfPlay(s) {
 function renderIdle(s) {
   document.getElementById("status-dot").classList.remove("live");
   gameState = "idle";
-  document.getElementById("self-play-screen").style.display = "none";
+  selfPlayActive = false;
   const wasActive = prevGameState === "active";
   prevGameState = "idle";
 
@@ -2211,7 +2212,7 @@ function renderIdle(s) {
 
 function renderUpdate(s) {
   document.getElementById("status-dot").classList.add("live");
-  document.getElementById("self-play-screen").style.display = "none";
+  selfPlayActive = false;
   gameState = "active";
 
   // Auto-switch to game tab when game starts
