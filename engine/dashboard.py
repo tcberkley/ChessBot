@@ -17,6 +17,7 @@ import datetime
 import json
 import os
 import queue
+import random
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -41,6 +42,26 @@ PROFILE_CACHE_TTL  = 60   # seconds to cache /api/account response
 GAMES_CACHE_TTL    = 60   # seconds to cache recent games
 ACTIVITY_N         = 50   # max rows in merged activity feed
 CHALLENGE_LOG_N    = 50   # read last N challenge rows
+
+SELF_PLAY_LOG_PATH      = "/root/scripts/self_play_log.jsonl"
+SELF_PLAY_LOG_SHOW      = 100
+SELF_PLAY_ENGINE_DIR    = "/root/c_rewrite"
+SELF_PLAY_ENGINES       = {
+    "v1.11": "v24_engine",
+    "v2.1":  "v26_engine",
+    "v2.2":  "v27_engine",
+    "v2.3":  "v28_engine",
+}
+SELF_PLAY_N_GAMES       = 8
+SELF_PLAY_MOVETIME      = 1.0
+SELF_PLAY_MOVE_PAUSE    = 2.0
+SELF_PLAY_COMPUTE_SLOTS = 2
+SELF_PLAY_BROADCAST_SEC = 0.5
+
+OPENING_MOVES = [
+    "e2e4", "d2d4", "c2c4", "g1f3", "b1c3",
+    "f2f4", "g2g3", "b2b4", "e2e3", "d2d3",
+]
 
 
 # ── Token loading ─────────────────────────────────────────────────────────────
@@ -176,7 +197,12 @@ def fetch_recent_games(token: str, n: int = ACTIVITY_N) -> list:
                 clock = g.get("clock", {})
                 initial   = clock.get("initial", 0)
                 increment = clock.get("increment", 0)
-                tc = f"{initial // 60}+{increment}" if clock else "—"
+                def _fmt_tc_mins(secs):
+                    if secs == 0: return "0"
+                    if secs < 60:
+                        return {15: "¼", 30: "½", 45: "¾"}.get(secs, f"{secs}s")
+                    return str(secs // 60)
+                tc = f"{_fmt_tc_mins(initial)}+{increment}" if clock else "—"
 
                 created_ms = g.get("createdAt", 0)
                 ts_utc = datetime.datetime.utcfromtimestamp(created_ms / 1000).strftime(
@@ -313,6 +339,10 @@ def apply_game_state(current: dict, event: dict) -> dict:
     }
     if status not in ("started", "created"):
         updated["type"] = "idle"
+        updated["last_result"] = {
+            "winner": event.get("winner"),
+            "status": status,
+        }
     return updated
 
 
@@ -443,15 +473,223 @@ class SFEngine:
                 self._engine = None
 
 
+# ── Self-play arena ───────────────────────────────────────────────────────────
+class SelfPlayGame:
+    def __init__(self, idx: int):
+        self.idx          = idx
+        self.board        = chess.Board()
+        self.last_move    = None
+        self.result       = None
+        self.status       = "starting"
+        self.move_count   = 0
+        self.white_label  = ""
+        self.black_label  = ""
+        self.white_engine = None
+        self.black_engine = None
+        self.white_wins   = 0
+        self.black_wins   = 0
+        self.draws        = 0
+
+    def _open_engines(self, white_label: str, black_label: str) -> bool:
+        try:
+            wp = os.path.join(SELF_PLAY_ENGINE_DIR, SELF_PLAY_ENGINES[white_label])
+            bp = os.path.join(SELF_PLAY_ENGINE_DIR, SELF_PLAY_ENGINES[black_label])
+            self.white_engine = chess.engine.SimpleEngine.popen_uci(wp)
+            self.black_engine = chess.engine.SimpleEngine.popen_uci(bp)
+            self.white_engine.configure({"Threads": 1})
+            self.black_engine.configure({"Threads": 1})
+            return True
+        except Exception:
+            return False
+
+    def start_engines(self) -> bool:
+        labels = random.sample(list(SELF_PLAY_ENGINES.keys()), 2)
+        self.white_label, self.black_label = labels
+        return self._open_engines(self.white_label, self.black_label)
+
+    def new_game(self):
+        self.board      = chess.Board()
+        self.last_move  = None
+        self.result     = None
+        self.status     = "playing"
+        self.move_count = 0
+        labels = random.sample(list(SELF_PLAY_ENGINES.keys()), 2)
+        self.white_label, self.black_label = labels
+        for eng in (self.white_engine, self.black_engine):
+            if eng:
+                try: eng.quit()
+                except: pass
+        self.white_engine = self.black_engine = None
+        if not self._open_engines(self.white_label, self.black_label):
+            self.status = "error"
+            return
+        opening = random.choice(OPENING_MOVES)
+        try:
+            move = chess.Move.from_uci(opening)
+            if move in self.board.legal_moves:
+                self.board.push(move)
+                self.last_move = opening
+        except Exception:
+            pass
+
+    def make_move(self) -> bool:
+        if self.board.is_game_over():
+            self._record_result(); return False
+        engine = self.white_engine if self.board.turn == chess.WHITE else self.black_engine
+        if engine is None:
+            self.status = "error"; return False
+        try:
+            r = engine.play(self.board, chess.engine.Limit(time=SELF_PLAY_MOVETIME))
+            self.board.push(r.move)
+            self.last_move  = r.move.uci()
+            self.move_count += 1
+            if self.board.is_game_over():
+                self._record_result(); return False
+        except Exception:
+            self.status = "error"; return False
+        return True
+
+    def _record_result(self):
+        self.status = "finished"
+        out = self.board.outcome()
+        if out is None:
+            self.result = "½-½"; self.draws += 1
+        elif out.winner == chess.WHITE:
+            self.result = "1-0"; self.white_wins += 1
+        elif out.winner == chess.BLACK:
+            self.result = "0-1"; self.black_wins += 1
+        else:
+            self.result = "½-½"; self.draws += 1
+        entry = {
+            "ts":     datetime.datetime.utcnow().isoformat(timespec="seconds") + "Z",
+            "white":  self.white_label,
+            "black":  self.black_label,
+            "result": self.result,
+            "moves":  self.move_count,
+        }
+        try:
+            with open(SELF_PLAY_LOG_PATH, "a") as f:
+                f.write(json.dumps(entry) + "\n")
+        except Exception:
+            pass
+
+    def to_state(self) -> dict:
+        return {
+            "idx":         self.idx,
+            "fen":         self.board.fen(),
+            "last_move":   self.last_move,
+            "result":      self.result,
+            "status":      self.status,
+            "move_count":  self.move_count,
+            "white_label": self.white_label,
+            "black_label": self.black_label,
+            "white_wins":  self.white_wins,
+            "black_wins":  self.black_wins,
+            "draws":       self.draws,
+            "turn":        "w" if self.board.turn == chess.WHITE else "b",
+        }
+
+    def stop(self):
+        for eng in (self.white_engine, self.black_engine):
+            if eng:
+                try: eng.quit()
+                except: pass
+        self.white_engine = self.black_engine = None
+
+
+class SelfPlayManager:
+    def __init__(self, shared: "SharedState"):
+        self.shared     = shared
+        self.games      = [SelfPlayGame(i) for i in range(SELF_PLAY_N_GAMES)]
+        self.stop_event = threading.Event()
+        self._move_q: queue.Queue = queue.Queue()
+
+    def start(self):
+        self.stop_event.clear()
+        for _ in range(SELF_PLAY_COMPUTE_SLOTS):
+            threading.Thread(target=self._worker, daemon=True).start()
+        # Stagger game launches to avoid CPU spike from simultaneous engine init
+        for i, game in enumerate(self.games):
+            def _launch(g=game, delay=i * 0.8):
+                time.sleep(delay)
+                if not self.stop_event.is_set():
+                    if g.start_engines():
+                        g.new_game()
+            threading.Thread(target=_launch, daemon=True).start()
+            threading.Thread(target=self._game_loop, args=(game,), daemon=True).start()
+        threading.Thread(target=self._broadcast_loop, daemon=True).start()
+
+    def stop(self):
+        self.stop_event.set()
+        while not self._move_q.empty():
+            try:
+                _, done = self._move_q.get_nowait()
+                done.set()
+            except Exception:
+                pass
+        for game in self.games:
+            game.stop()
+
+    def _worker(self):
+        while not self.stop_event.is_set():
+            try:
+                game, done = self._move_q.get(timeout=1)
+                if not self.stop_event.is_set():
+                    game.make_move()
+                done.set()
+            except queue.Empty:
+                pass
+
+    def _game_loop(self, game: SelfPlayGame):
+        while not self.stop_event.is_set():
+            if game.status == "playing":
+                done = threading.Event()
+                self._move_q.put((game, done))
+                done.wait(timeout=60)
+                if not self.stop_event.is_set():
+                    time.sleep(SELF_PLAY_MOVE_PAUSE)
+            elif game.status == "finished":
+                time.sleep(2.5)
+                if not self.stop_event.is_set():
+                    game.new_game()
+            else:
+                time.sleep(0.2)
+
+    @staticmethod
+    def _load_log() -> list:
+        try:
+            with open(SELF_PLAY_LOG_PATH) as f:
+                lines = f.readlines()
+            entries = []
+            for line in lines[-SELF_PLAY_LOG_SHOW:]:
+                try: entries.append(json.loads(line))
+                except: pass
+            entries.reverse()
+            return entries
+        except Exception:
+            return []
+
+    def _broadcast_loop(self):
+        while not self.stop_event.is_set():
+            self.shared.update({
+                "type":    "self_play",
+                "games":   [g.to_state() for g in self.games],
+                "history": self._load_log(),
+            })
+            time.sleep(SELF_PLAY_BROADCAST_SEC)
+
+
 # ── Game monitor thread ───────────────────────────────────────────────────────
 def game_monitor_loop(shared: SharedState, token: str):
-    current_game_id = None
-    stream_thread = None
+    current_game_id   = None
+    stream_thread     = None
     stream_stop_event = None
-    file_pos = 0
-    sf_engine = SFEngine()
-    last_engine_stats = None  # persist last valid (non-null) engine stats
-    last_sf_fen = None  # track last FEN we ran SF on
+    file_pos          = 0
+    sf_engine         = SFEngine()
+    last_engine_stats = None
+    last_sf_fen       = None
+    self_play         = SelfPlayManager(shared)
+    self_play_running = False
 
     while True:
         try:
@@ -473,14 +711,20 @@ def game_monitor_loop(shared: SharedState, token: str):
             extra        = {"activity": activity, "challenges": challenges, "daily_counts": daily_counts, "profile": profile}
 
             if game_id != current_game_id:
+                # Stop self-play instantly when a real game begins
+                if self_play_running:
+                    self_play.stop()
+                    self_play         = SelfPlayManager(shared)
+                    self_play_running = False
+
                 # Stop old stream thread
                 if stream_stop_event is not None:
                     stream_stop_event.set()
 
                 current_game_id = game_id
-                file_pos = 0  # reset tail position for new game
+                file_pos = 0
                 sf_engine.clear_cache()
-                last_engine_stats = None  # clear stats for new game
+                last_engine_stats = None
                 last_sf_fen = None
 
                 if game_id is None:
@@ -498,8 +742,13 @@ def game_monitor_loop(shared: SharedState, token: str):
                     )
                     stream_thread.start()
 
-            # Refresh idle state every poll cycle
-            if game_id is None:
+            # Start self-play when idle
+            if game_id is None and not self_play_running:
+                self_play.start()
+                self_play_running = True
+
+            # Refresh idle state every poll cycle (only when not in self-play)
+            if game_id is None and not self_play_running:
                 shared.update({"type": "idle", **extra})
 
             # Tail game_stats.jsonl for engine stats
@@ -606,6 +855,7 @@ header h1 { font-size: 1.4rem; font-weight: 600; color: #e8e8f0; }
   background: #ddd;
   transition: height 0.5s ease;
 }
+#eval-bar.flipped { bottom: auto; top: 0; }
 .info-col {
   display: flex;
   flex-direction: column;
@@ -688,17 +938,23 @@ header h1 { font-size: 1.4rem; font-weight: 600; color: #e8e8f0; }
 }
 .eval-value.positive { color: #2ecc71; }
 .eval-value.negative { color: #e74c3c; }
-.stats-table { width: 100%; border-collapse: collapse; }
+.stats-table { width: 100%; border-collapse: collapse; overflow: visible; table-layout: fixed; }
 .stats-table th {
   text-align: left; font-size: 0.7rem; color: #6878a8;
   text-transform: uppercase; padding: 4px 6px;
-  border-bottom: 1px solid #2d2d44;
+  border-bottom: 1px solid #2d2d44; overflow: visible; position: relative;
 }
 .stats-table td {
   font-size: 0.85rem; padding: 6px 6px;
   font-variant-numeric: tabular-nums;
-  color: #c8d0f0;
+  color: #c8d0f0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+.stats-table th:nth-child(1), .stats-table td:nth-child(1) { width: 14%; }
+.stats-table th:nth-child(2), .stats-table td:nth-child(2) { width: 17%; }
+.stats-table th:nth-child(3), .stats-table td:nth-child(3) { width: 17%; }
+.stats-table th:nth-child(4), .stats-table td:nth-child(4) { width: 14%; }
+.stats-table th:nth-child(5), .stats-table td:nth-child(5) { width: 14%; }
+.stats-table th:nth-child(6), .stats-table td:nth-child(6) { width: 24%; }
 #idle-screen { display: none; }
 #idle-stats-row {
   display: grid;
@@ -838,6 +1094,20 @@ header h1 { font-size: 1.4rem; font-weight: 600; color: #e8e8f0; }
   transition: all 0.15s; margin-left: 8px;
 }
 .info-btn:hover { color: #c8d0f0; border-color: #4a4a74; }
+.stat-th-tip {
+  display: inline-block; width: 14px; height: 14px; border-radius: 50%;
+  background: #2d2d54; color: #6878a8; font-size: 0.65rem; font-weight: 700;
+  line-height: 14px; text-align: center; cursor: default;
+  position: relative; margin-left: 4px; vertical-align: middle;
+}
+#stat-tooltip {
+  display: none; position: fixed;
+  background: #1a2040; color: #c8d0f0; font-size: 0.7rem; font-weight: 400;
+  padding: 5px 9px; border-radius: 4px; border: 1px solid #2d2d54;
+  white-space: nowrap; z-index: 9999; pointer-events: none;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+  transform: translateX(-50%);
+}
 .info-modal-backdrop {
   display: none; position: fixed; inset: 0;
   background: rgba(0,0,0,0.6); z-index: 100;
@@ -870,6 +1140,29 @@ header h1 { font-size: 1.4rem; font-weight: 600; color: #e8e8f0; }
 .info-link-icon { font-size: 1.1rem; width: 22px; text-align: center; flex-shrink: 0; }
 .table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
 .table-scroll table { white-space: nowrap; }
+#result-overlay {
+  display: none; position: fixed; inset: 0; z-index: 50;
+  align-items: center; justify-content: center;
+  background: rgba(5,8,22,0.82); backdrop-filter: blur(4px);
+  cursor: pointer;
+}
+#result-card {
+  background: #16213e; border: 1px solid #2d2d54; border-radius: 14px;
+  padding: 36px 44px; text-align: center; min-width: 280px; max-width: 360px;
+  cursor: default; position: relative;
+}
+#result-icon { font-size: 3.2rem; line-height: 1; margin-bottom: 14px; }
+#result-heading { font-size: 2rem; font-weight: 700; margin-bottom: 6px; }
+#result-opponent { font-size: 0.95rem; color: #8898c8; margin-bottom: 3px; }
+#result-method { font-size: 0.85rem; color: #4a5070; margin-bottom: 24px; text-transform: capitalize; }
+#result-game-link {
+  display: inline-block; padding: 7px 18px; border: 1px solid #2d2d54;
+  border-radius: 6px; color: #6878a8; font-size: 0.85rem; text-decoration: none;
+  transition: all 0.15s; margin-bottom: 22px;
+}
+#result-game-link:hover { color: #c8d0f0; border-color: #4a4a74; }
+#result-dismiss-bar { height: 3px; background: #1a2030; border-radius: 2px; overflow: hidden; }
+#result-dismiss-fill { height: 100%; background: #3498db; width: 100%; }
 @media (max-width: 600px) {
   .container { padding: 10px; }
   header { flex-wrap: wrap; padding-bottom: 14px; }
@@ -881,6 +1174,107 @@ header h1 { font-size: 1.4rem; font-weight: 600; color: #e8e8f0; }
   .idle-stat-value { font-size: 1.3rem; }
   .player-name { overflow-wrap: break-word; word-break: break-all; }
 }
+@keyframes ponder-pulse { 0%,100%{opacity:1} 50%{opacity:0.45} }
+.pondering { animation: ponder-pulse 1.8s ease-in-out infinite; color: #8898c8 !important; }
+#board-mate-sweep {
+  position: absolute; inset: 0; pointer-events: none; overflow: hidden; z-index: 10;
+}
+#board-mate-sweep::after {
+  content: ''; position: absolute; top: 0; bottom: 0; left: -60%; width: 60%;
+  background: linear-gradient(90deg, transparent, rgba(46,204,113,0.55), transparent);
+}
+#board-mate-sweep.sweeping::after {
+  animation: board-mate-sweep 0.9s ease-in-out forwards;
+}
+@keyframes board-mate-sweep { 0% { left: -60%; } 100% { left: 100%; } }
+/* ── Self-play arena ──────────────────────────────────────────────────────── */
+#self-play-screen { display: none; }
+#sp-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 14px;
+}
+#sp-header-title {
+  font-size: 0.85rem;
+  color: #6878a8;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.sp-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+}
+@media (max-width: 700px) { .sp-grid { grid-template-columns: repeat(2, 1fr); } }
+.sp-card {
+  background: #16213e;
+  border: 1px solid #2d2d54;
+  border-radius: 8px;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.sp-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.65rem;
+  color: #6878a8;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.sp-matchup { font-size: 0.65rem; color: #8898c8; font-weight: 600; }
+.sp-result-badge {
+  font-size: 0.6rem; font-weight: 700; padding: 1px 4px; border-radius: 3px;
+}
+.sp-result-badge.white-wins { background: #e8e8e8; color: #1a1a2e; }
+.sp-result-badge.black-wins { background: #2a2a3a; color: #c0c0d8; border: 1px solid #444; }
+.sp-result-badge.draw       { background: #4a4a6a; color: #c0c0d8; }
+.mini-board {
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  width: 100%;
+  aspect-ratio: 1;
+  border: 1px solid #2d2d54;
+  border-radius: 2px;
+  overflow: hidden;
+}
+.mini-sq {
+  display: flex; align-items: center; justify-content: center;
+  font-size: clamp(8px, 1.8vw, 15px); line-height: 1; user-select: none;
+}
+.mini-sq.light { background: #f0d9b5; }
+.mini-sq.dark  { background: #b58863; }
+.mini-sq.hi    { background: #cdd26a; }
+.mini-sq.dark.hi { background: #aaa23a; }
+.sp-score-row {
+  display: flex; justify-content: space-between;
+  font-size: 0.65rem; color: #6878a8;
+}
+.sp-score-row .sp-score-val { color: #a0a8c8; font-weight: 600; }
+#sp-history {
+  margin-top: 20px; border: 1px solid #2d2d54;
+  border-radius: 8px; overflow: hidden;
+}
+#sp-history-title {
+  padding: 8px 14px; background: #16213e;
+  font-size: 0.75rem; color: #6878a8;
+  text-transform: uppercase; letter-spacing: 0.06em;
+  border-bottom: 1px solid #2d2d54;
+}
+#sp-history table { width: 100%; border-collapse: collapse; font-size: 0.75rem; }
+#sp-history th {
+  padding: 6px 12px; text-align: left; color: #6878a8;
+  font-weight: 500; background: #131226; border-bottom: 1px solid #2d2d54;
+}
+#sp-history td { padding: 5px 12px; color: #c0c0d8; border-bottom: 1px solid #1e1e38; }
+#sp-history tr:last-child td { border-bottom: none; }
+#sp-history tr:hover td { background: #1a1a36; }
+.sp-res-w { color: #e0e0e0; font-weight: 600; }
+.sp-res-b { color: #a0a0b8; font-weight: 600; }
+.sp-res-d { color: #6878a8; font-weight: 600; }
 </style>
 </head>
 <body>
@@ -934,7 +1328,10 @@ header h1 { font-size: 1.4rem; font-weight: 600; color: #e8e8f0; }
           <span id="opponent-name-text">—</span>
           <span id="opp-captures" class="captures"></span>
         </div>
-        <div id="board"></div>
+        <div id="board-wrap" style="position:relative;display:inline-block">
+          <div id="board"></div>
+          <div id="board-mate-sweep"></div>
+        </div>
         <div id="bot-label" class="board-player-label">
           <span id="bot-name-text">—</span>
           <span id="bot-captures" class="captures"></span>
@@ -981,7 +1378,7 @@ header h1 { font-size: 1.4rem; font-weight: 600; color: #e8e8f0; }
           <div class="card-title">Evaluation</div>
           <div class="eval-display">
             <div class="eval-item">
-              <div class="eval-label">Bot (v2.1)</div>
+              <div class="eval-label">Bot (v2.2)</div>
               <div class="eval-value" id="bot-eval">—</div>
             </div>
             <div class="eval-item">
@@ -997,7 +1394,12 @@ header h1 { font-size: 1.4rem; font-weight: 600; color: #e8e8f0; }
           <table class="stats-table">
             <thead>
               <tr>
-                <th>Depth</th><th>Nodes</th><th>NPS</th><th>Time</th><th>TB Hits</th><th>Source</th>
+                <th>Depth <span class="stat-th-tip" data-tip="Search depth in iterative deepening">i</span></th>
+                <th>Nodes <span class="stat-th-tip" data-tip="Total positions evaluated this move">i</span></th>
+                <th>NPS <span class="stat-th-tip" data-tip="Nodes per second (nodes ÷ search time)">i</span></th>
+                <th>Time <span class="stat-th-tip" data-tip="Total search time for this move (seconds)">i</span></th>
+                <th>TB Hits <span class="stat-th-tip" data-tip="Syzygy tablebase probes that resolved a position (endgame only)">i</span></th>
+                <th>Source <span class="stat-th-tip" data-tip="engine = normal search · tb = tablebase win · book = opening">i</span></th>
               </tr>
             </thead>
             <tbody>
@@ -1028,8 +1430,7 @@ header h1 { font-size: 1.4rem; font-weight: 600; color: #e8e8f0; }
       <div class="card">
         <div class="card-title">Activity</div>
         <div id="activity-filter-bar" style="display:flex;gap:6px;margin-bottom:12px;flex-wrap:wrap">
-          <button class="view-tab active" id="af-all"      onclick="setActivityFilter('all')">All</button>
-          <button class="view-tab"        id="af-games"    onclick="setActivityFilter('games')">Games</button>
+          <button class="view-tab active" id="af-games"    onclick="setActivityFilter('games')">Games</button>
           <button class="view-tab"        id="af-outgoing" onclick="setActivityFilter('outgoing')">Outgoing</button>
           <button class="view-tab"        id="af-incoming" onclick="setActivityFilter('incoming')">Incoming</button>
         </div>
@@ -1073,6 +1474,37 @@ header h1 { font-size: 1.4rem; font-weight: 600; color: #e8e8f0; }
       </div>
     </div>
   </div>
+
+  <div id="self-play-screen">
+    <div id="sp-header">
+      <span id="sp-header-title">Self-Play Arena</span>
+      <span id="sp-move-ticker" style="font-size:0.7rem;color:#6878a8;"></span>
+    </div>
+    <div id="sp-grid" class="sp-grid"></div>
+    <div id="sp-history">
+      <div id="sp-history-title">Game History</div>
+      <table>
+        <thead>
+          <tr>
+            <th>#</th><th>White</th><th>Black</th>
+            <th>Result</th><th>Moves</th><th>Time (UTC)</th>
+          </tr>
+        </thead>
+        <tbody id="sp-history-body"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<div id="result-overlay" onclick="dismissResultOverlay()">
+  <div id="result-card" onclick="event.stopPropagation()">
+    <div id="result-icon"></div>
+    <div id="result-heading"></div>
+    <div id="result-opponent"></div>
+    <div id="result-method"></div>
+    <a id="result-game-link" href="#" target="_blank" rel="noopener">View on Lichess &rarr;</a>
+    <div id="result-dismiss-bar"><div id="result-dismiss-fill"></div></div>
+  </div>
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.min.js"></script>
@@ -1081,7 +1513,7 @@ header h1 { font-size: 1.4rem; font-weight: 600; color: #e8e8f0; }
 <script>
 // Inject highlight style
 const _hs = document.createElement("style");
-_hs.textContent = ".sq-highlight { background: rgba(52,152,219,0.45) !important; }";
+_hs.textContent = ".sq-highlight { background: rgba(52,152,219,0.45) !important; } .sq-check { background: rgba(231,76,60,0.55) !important; }";
 document.head.appendChild(_hs);
 
 // ── State ───────────────────────────────────────────────────────────────────
@@ -1091,14 +1523,31 @@ let prevGameState = "idle";
 let activeTab = "game";
 let lastIdleState = null;
 let sparklineTC = "all";
-let activityFilter = "all";
+let activityFilter = "games";
 let clockInterval = null;
 let wtime_ms = 0, btime_ms = 0;
 let currentTurn = "white";
+let mateSweptThisGame = false;
+let lastBoardFen = null;
 let clockTickAt = null;
 let lastClockWtime = -1, lastClockBtime = -1, lastClockTurn = null;
+let resultDismissTimer = null;
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
+function tcSortKey(tc) {
+  if (!tc || tc === "—" || tc === "?") return [Infinity, Infinity];
+  var parts = tc.split("+");
+  function parseMins(s) {
+    if (s === "¼") return 0.25; if (s === "½") return 0.5; if (s === "¾") return 0.75;
+    if (s && s.endsWith("s")) return parseInt(s) / 60;
+    return parseFloat(s) || 0;
+  }
+  return [parseMins(parts[0] || "0"), parseFloat(parts[1] || "0")];
+}
+function cmpTC(a, b) {
+  var ka = tcSortKey(a), kb = tcSortKey(b);
+  return ka[0] !== kb[0] ? ka[0] - kb[0] : ka[1] - kb[1];
+}
 function fmtMs(ms) {
   if (ms == null || ms < 0) ms = 0;
   const s = Math.floor(ms / 1000);
@@ -1125,6 +1574,7 @@ function fmtNps(n) {
 function fmtCp(cp, mate) {
   if (mate != null) return (mate > 0 ? "+" : "") + "#" + mate;
   if (cp == null) return "—";
+  if (Math.abs(cp) >= 9000) return cp > 0 ? "TB+" : "TB-";
   const v = (cp / 100).toFixed(2);
   return cp >= 0 ? "+" + v : v;
 }
@@ -1169,11 +1619,16 @@ function initBoard(orientation) {
     orientation: orientation,
     pieceTheme: "/img/{piece}.png",
     draggable: false,
+    moveSpeed: 120,
   });
+  lastBoardFen = null;
 }
 function setPosition(fen, lastMove) {
   if (!board) return;
-  board.position(fen, false);
+  if (fen !== lastBoardFen) {
+    board.position(fen, true);
+    lastBoardFen = fen;
+  }
   $(".square-55d63").removeClass("sq-highlight");
   if (lastMove && lastMove.length >= 4) {
     const from = lastMove.slice(0, 2);
@@ -1181,6 +1636,21 @@ function setPosition(fen, lastMove) {
     $("[data-square='" + from + "']").addClass("sq-highlight");
     $("[data-square='" + to   + "']").addClass("sq-highlight");
   }
+  $(".square-55d63").removeClass("sq-check");
+  try {
+    const ch = new Chess(fen);
+    if (ch.in_check()) {
+      const turn = ch.turn();
+      const bd = ch.board();
+      for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
+        if (bd[r][c] && bd[r][c].type === 'k' && bd[r][c].color === turn) {
+          const file = 'abcdefgh'[c];
+          const rank = 8 - r;
+          $("[data-square='" + file + rank + "']").addClass("sq-check");
+        }
+      }
+    }
+  } catch(e) {}
 }
 
 // ── Material captured ────────────────────────────────────────────────────────
@@ -1246,7 +1716,7 @@ function switchTab(tab) {
 // ── Activity filter ──────────────────────────────────────────────────────────
 function setActivityFilter(f) {
   activityFilter = f;
-  ["all","games","outgoing","incoming"].forEach(function(k) {
+  ["games","outgoing","incoming"].forEach(function(k) {
     document.getElementById("af-" + k).classList.toggle("active", k === f);
   });
   if (lastIdleState) updateIdleContent(lastIdleState);
@@ -1308,7 +1778,7 @@ function renderStats(s) {
   }
 
   // Sparkline
-  const tcs = Array.from(new Set(games.map(function(g) { return g.time_control; }))).sort();
+  const tcs = Array.from(new Set(games.map(function(g) { return g.time_control; }))).sort(cmpTC);
   const tcBtns = [["all","All"]].concat(tcs.map(function(t) { return [t, t]; }));
   document.getElementById("sparkline-tc-buttons").innerHTML = tcBtns.map(function(b) {
     return "<button class='sparkline-tc-btn" + (sparklineTC === b[0] ? " active" : "")
@@ -1358,7 +1828,7 @@ function renderStats(s) {
     else if (g.event === "draw") byTC[t].d++;
     else byTC[t].l++;
   });
-  const tcRows = Object.keys(byTC).sort().map(function(t) {
+  const tcRows = Object.keys(byTC).sort(cmpTC).map(function(t) {
     const b = byTC[t];
     const n = b.w + b.d + b.l;
     const sc = ((b.w + b.d * 0.5) / n * 100).toFixed(0);
@@ -1508,7 +1978,14 @@ function updateGameContent(s) {
   ratedEl.textContent = g.rated ? "Rated" : "Casual";
   ratedEl.classList.toggle("rated", !!g.rated);
   const init = g.clock_initial, inc = g.clock_increment;
-  document.getElementById("tc-chip").textContent = init ? Math.floor(init / 60000) + "+" + Math.round(inc / 1000) : "—";
+  (function() {
+    if (!init && !inc) { document.getElementById("tc-chip").textContent = "—"; return; }
+    const initS = Math.round((init||0) / 1000);
+    const incS  = Math.round((inc||0) / 1000);
+    const fracs = {15:"¼", 30:"½", 45:"¾"};
+    const minStr = initS >= 60 ? Math.floor(initS/60) : (fracs[initS] || initS+"s");
+    document.getElementById("tc-chip").textContent = minStr + "+" + incS;
+  })();
   const link = document.getElementById("game-url");
   link.href = g.url;
   link.textContent = "lichess.org/" + g.id + " \u2192";
@@ -1554,6 +2031,13 @@ function updateGameContent(s) {
   const botEl = document.getElementById("bot-eval");
   botEl.textContent = fmtCp(botCp, botMate);
   botEl.className   = "eval-value " + cpClass(botCp, botMate);
+  if (!mateSweptThisGame && botMate != null && botMate > 0) {
+    mateSweptThisGame = true;
+    const sweep = document.getElementById("board-mate-sweep");
+    sweep.classList.remove("sweeping");
+    void sweep.offsetWidth;
+    sweep.classList.add("sweeping");
+  }
 
   // SF eval (stored from white's POV — flip sign for color when bot is black)
   const sfEl = document.getElementById("sf-eval");
@@ -1565,23 +2049,182 @@ function updateGameContent(s) {
   // Eval bar — eng.cp is from side-to-move's POV; convert to white's POV for the bar
   const barCp   = (botCp   != null && s.bot_color === "black") ? -botCp   : botCp;
   const barMate = (botMate != null && s.bot_color === "black") ? -botMate : botMate;
+  document.getElementById("eval-bar").classList.toggle("flipped", s.bot_color === "black");
   document.getElementById("eval-bar").style.height = evalToPercent(barCp, barMate) + "%";
 
   // Engine stats
+  const isOpponentTurn = s.clock && s.clock.turn !== s.bot_color;
   document.getElementById("st-depth").textContent  = eng && eng.depth  != null ? eng.depth  : "—";
   document.getElementById("st-nodes").textContent  = eng ? fmtNodes(eng.nodes)  : "—";
   const derivedNps = (eng && eng.nps != null) ? eng.nps
     : (eng && eng.nodes && eng.time_ms ? Math.round(eng.nodes / eng.time_ms) : null);
   document.getElementById("st-nps").textContent    = fmtNps(derivedNps);
-  document.getElementById("st-time").textContent   = eng && eng.time_ms != null ? eng.time_ms.toFixed(2) + "s" : "—";
+  document.getElementById("st-time").textContent   =
+    isOpponentTurn ? "—" : (eng && eng.time_ms != null ? eng.time_ms.toFixed(2) + "s" : "—");
   document.getElementById("st-tbhits").textContent = eng ? fmtNodes(eng.tbhits) : "—";
-  document.getElementById("st-source").textContent = eng && eng.source  ? eng.source  : "—";
+  const srcEl = document.getElementById("st-source");
+  if (isOpponentTurn) {
+    const pmove = eng && eng.ponder_move ? " " + eng.ponder_move : "";
+    srcEl.textContent = "Pondering" + pmove;
+    srcEl.classList.add("pondering");
+  } else {
+    srcEl.textContent = eng && eng.source ? eng.source : "—";
+    srcEl.classList.remove("pondering");
+  }
+}
+
+// ── Game result overlay ──────────────────────────────────────────────────────
+const RESULT_METHOD = {
+  resign: "by resignation", mate: "by checkmate", stalemate: "draw by stalemate",
+  draw: "by agreement", timeout: "on time", outoftime: "on time",
+  cheat: "by cheat detection", variantEnd: "variant end",
+};
+function showResultOverlay(s) {
+  const lr = s.last_result, botColor = s.bot_color, game = s.game;
+  const winner = lr.winner;
+  let heading, icon, color;
+  if (!winner || lr.status === "draw" || lr.status === "stalemate") {
+    heading = "Draw"; icon = "½"; color = "#8898c8";
+  } else if (winner === botColor) {
+    heading = "Victory!"; icon = "♛"; color = "#2ecc71";
+  } else {
+    heading = "Defeat"; icon = "♟"; color = "#e74c3c";
+  }
+  const oppColor = botColor === "white" ? "black" : "white";
+  const opp = game[oppColor];
+  document.getElementById("result-icon").textContent = icon;
+  document.getElementById("result-heading").textContent = heading;
+  document.getElementById("result-heading").style.color = color;
+  document.getElementById("result-opponent").textContent = "vs " + opp.name + (opp.rating ? " (" + opp.rating + ")" : "");
+  document.getElementById("result-method").textContent = RESULT_METHOD[lr.status] || lr.status || "";
+  document.getElementById("result-game-link").href = game.url;
+  const overlay = document.getElementById("result-overlay");
+  overlay.style.display = "flex";
+  const fill = document.getElementById("result-dismiss-fill");
+  fill.style.transition = "none";
+  fill.style.width = "100%";
+  setTimeout(function() { fill.style.transition = "width 6s linear"; fill.style.width = "0%"; }, 30);
+  clearTimeout(resultDismissTimer);
+  resultDismissTimer = setTimeout(dismissResultOverlay, 6000);
+}
+function dismissResultOverlay() {
+  clearTimeout(resultDismissTimer);
+  document.getElementById("result-overlay").style.display = "none";
+}
+
+// ── Mini-board renderer ───────────────────────────────────────────────────────
+const SP_PIECES = {
+  K:"\u2654", Q:"\u2655", R:"\u2656", B:"\u2657", N:"\u2658", P:"\u2659",
+  k:"\u265a", q:"\u265b", r:"\u265c", b:"\u265d", n:"\u265e", p:"\u265f"
+};
+
+function buildMiniBoard(fen, lastMove) {
+  const rows = fen.split(" ")[0].split("/");
+  const hi   = new Set(lastMove && lastMove.length >= 4
+    ? [lastMove.slice(0,2), lastMove.slice(2,4)] : []);
+  var html = "";
+  for (var r = 0; r < 8; r++) {
+    var f = 0;
+    for (var ci = 0; ci < rows[r].length; ci++) {
+      var ch = rows[r][ci];
+      if (ch >= "1" && ch <= "8") {
+        for (var e = 0; e < +ch; e++, f++) {
+          var sq   = "abcdefgh"[f] + (8 - r);
+          var lite = (f + r) % 2 === 0;
+          var hlit = hi.has(sq);
+          html += "<div class=\"mini-sq " + (lite?"light":"dark") + (hlit?" hi":"") + "\"></div>";
+        }
+      } else {
+        var sq   = "abcdefgh"[f] + (8 - r);
+        var lite = (f + r) % 2 === 0;
+        var hlit = hi.has(sq);
+        html += "<div class=\"mini-sq " + (lite?"light":"dark") + (hlit?" hi":"") + "\">"
+              + (SP_PIECES[ch]||"") + "</div>";
+        f++;
+      }
+    }
+  }
+  return html;
+}
+
+function renderSelfPlay(s) {
+  document.getElementById("status-dot").classList.remove("live");
+  gameState = "idle";
+  prevGameState = "idle";
+  stopClock();
+
+  document.getElementById("game-screen") && (document.getElementById("game-screen").style.display = "none");
+  document.getElementById("idle-screen").style.display     = "none";
+  document.getElementById("self-play-screen").style.display = "block";
+
+  var grid = document.getElementById("sp-grid");
+  if (!grid) return;
+
+  var totalMoves = 0;
+  s.games.forEach(function(g) { totalMoves += g.move_count; });
+  document.getElementById("sp-move-ticker").textContent = totalMoves + " total moves";
+
+  s.games.forEach(function(g) {
+    var card = document.getElementById("sp-card-" + g.idx);
+    if (!card) {
+      card = document.createElement("div");
+      card.className = "sp-card";
+      card.id = "sp-card-" + g.idx;
+      grid.appendChild(card);
+    }
+
+    var badge = "";
+    if (g.status === "finished" && g.result) {
+      var winner = g.result === "1-0" ? g.white_label
+                 : g.result === "0-1" ? g.black_label : null;
+      var cls    = g.result === "1-0" ? "white-wins"
+                 : g.result === "0-1" ? "black-wins" : "draw";
+      badge = "<span class=\"sp-result-badge " + cls + "\">" + (winner ? winner + " wins" : "Draw") + "</span>";
+    }
+
+    card.innerHTML =
+      "<div class=\"sp-card-header\">"
+      + "<span class=\"sp-matchup\">" + g.white_label + " <span style=\"color:#444\">vs</span> " + g.black_label + "</span>"
+      + (badge || "<span>" + g.move_count + "m</span>")
+      + "</div>"
+      + "<div class=\"mini-board\">" + buildMiniBoard(g.fen, g.last_move) + "</div>"
+      + "<div class=\"sp-score-row\">"
+      + "<span>" + g.white_label + " <span class=\"sp-score-val\">" + g.white_wins + "W</span></span>"
+      + "<span><span class=\"sp-score-val\">" + g.draws + "D</span></span>"
+      + "<span>" + g.black_label + " <span class=\"sp-score-val\">" + g.black_wins + "W</span></span>"
+      + "</div>";
+  });
+
+  var tbody = document.getElementById("sp-history-body");
+  if (tbody && s.history) {
+    var rows = "";
+    s.history.forEach(function(h, i) {
+      var resCls = h.result === "1-0" ? "sp-res-w"
+                 : h.result === "0-1" ? "sp-res-b" : "sp-res-d";
+      var ts = h.ts ? h.ts.replace("T"," ").replace("Z","") : "\u2014";
+      rows += "<tr>"
+            + "<td>" + (s.history.length - i) + "</td>"
+            + "<td>" + h.white + "</td>"
+            + "<td>" + h.black + "</td>"
+            + "<td class=\"" + resCls + "\">" + h.result + "</td>"
+            + "<td>" + h.moves + "</td>"
+            + "<td style=\"color:#555\">" + ts + "</td>"
+            + "</tr>";
+    });
+    tbody.innerHTML = rows;
+  }
 }
 
 function renderIdle(s) {
   document.getElementById("status-dot").classList.remove("live");
   gameState = "idle";
+  document.getElementById("self-play-screen").style.display = "none";
+  const wasActive = prevGameState === "active";
   prevGameState = "idle";
+
+  if (wasActive && s && s.last_result && s.last_result.status !== "aborted") {
+    showResultOverlay(s);
+  }
 
   stopClock();
   lastClockWtime = -1; lastClockBtime = -1; lastClockTurn = null;
@@ -1598,6 +2241,7 @@ function renderIdle(s) {
 
 function renderUpdate(s) {
   document.getElementById("status-dot").classList.add("live");
+  document.getElementById("self-play-screen").style.display = "none";
   gameState = "active";
 
   // Auto-switch to game tab when game starts
@@ -1606,6 +2250,7 @@ function renderUpdate(s) {
     ["game","activity","stats"].forEach(function(t) {
       document.getElementById("tab-" + t).classList.toggle("active", t === "game");
     });
+    mateSweptThisGame = false;
   }
   prevGameState = "active";
 
@@ -1621,8 +2266,9 @@ function connect() {
   es.onmessage = function(e) {
     try {
       const s = JSON.parse(e.data);
-      if (s.type === "idle") renderIdle(s);
-      else if (s.type === "update") renderUpdate(s);
+      if      (s.type === "idle")      renderIdle(s);
+      else if (s.type === "update")    renderUpdate(s);
+      else if (s.type === "self_play") renderSelfPlay(s);
     } catch(err) {}
   };
   es.onerror = function() {
@@ -1634,6 +2280,25 @@ function connect() {
 
 renderIdle(null);
 connect();
+
+// Global floating tooltip — immune to table overflow clipping
+(function() {
+  var tt = document.createElement('div');
+  tt.id = 'stat-tooltip';
+  document.body.appendChild(tt);
+  document.querySelectorAll('.stat-th-tip').forEach(function(el) {
+    el.addEventListener('mouseenter', function() {
+      tt.textContent = el.dataset.tip || '';
+      var rect = el.getBoundingClientRect();
+      tt.style.top  = (rect.top - 38 + window.scrollY) + 'px';
+      tt.style.left = (rect.left + rect.width / 2) + 'px';
+      tt.style.display = 'block';
+    });
+    el.addEventListener('mouseleave', function() {
+      tt.style.display = 'none';
+    });
+  });
+})();
 </script>
 </body>
 </html>"""
