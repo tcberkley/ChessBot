@@ -603,6 +603,7 @@ class SelfPlayManager:
         self.games      = [SelfPlayGame(i) for i in range(SELF_PLAY_N_GAMES)]
         self.stop_event = threading.Event()
         self._move_q: queue.Queue = queue.Queue()
+        self._extra: dict = {}
 
     def start(self):
         self.stop_event.clear()
@@ -685,6 +686,9 @@ class SelfPlayManager:
             pass
         return total_games, total_moves
 
+    def set_extra(self, extra: dict):
+        self._extra = extra
+
     def _broadcast_loop(self):
         while not self.stop_event.is_set():
             total_games, total_moves = self._log_totals()
@@ -694,6 +698,7 @@ class SelfPlayManager:
                 "history":     self._load_log(),
                 "total_games": total_games,
                 "total_moves": total_moves,
+                **self._extra,
             })
             time.sleep(SELF_PLAY_BROADCAST_SEC)
 
@@ -730,8 +735,8 @@ def game_monitor_loop(shared: SharedState, token: str):
             extra        = {"activity": activity, "challenges": challenges, "daily_counts": daily_counts, "profile": profile}
 
             if game_id != current_game_id:
-                # Stop self-play instantly when a real game begins
-                if self_play_running:
+                # Stop self-play only when a real game is STARTING (not when it ends)
+                if self_play_running and game_id is not None:
                     self_play.stop()
                     self_play         = SelfPlayManager(shared)
                     self_play_running = False
@@ -766,9 +771,12 @@ def game_monitor_loop(shared: SharedState, token: str):
                 self_play.start()
                 self_play_running = True
 
-            # Refresh idle state every poll cycle (only when not in self-play)
-            if game_id is None and not self_play_running:
-                shared.update({"type": "idle", **extra})
+            # Push extra (activity/profile) every cycle — used by self_play broadcasts too
+            if game_id is None:
+                if self_play_running:
+                    self_play.set_extra(extra)
+                else:
+                    shared.update({"type": "idle", **extra})
 
             # Tail game_stats.jsonl for engine stats
             if game_id:
@@ -2227,6 +2235,10 @@ function renderSelfPlay(s) {
   prevGameState = "idle";
   selfPlayActive = true;
   stopClock();
+  if (s.activity || s.profile) {
+    lastIdleState = s;
+    updateIdleContent(s);
+  }
   applyTabView();
 
   var grid = document.getElementById("sp-grid");

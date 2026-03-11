@@ -10,7 +10,7 @@ Do NOT read, write, or execute anything outside this tree without explicit user 
 - **Lichess bot**: `tombot1234` on Hetzner CPX11 (`178.156.243.29`, Ubuntu 24.04)
 - **Engine**: C (BBC magic bitboard), UCI, multi-threaded (Lazy SMP + pondering)
 - **Bridge**: Python `lichess-bot` in `bot/`
-- **Current deployed**: `v2.2_engine` (~2300 Elo)
+- **Current deployed**: `v2.3_engine` (~2300 Elo)
 - **Engine source**: `engine/` | **Fathom Syzygy lib**: `engine/fathom*.{h,c}` + `tbconfig.h` `tbchess.c` `stdendian.h`
 
 ---
@@ -54,12 +54,12 @@ make vTest_engine
 echo -e "position startpos\nperft 5" | ./vTest_engine | tail -3
 
 # 3. Tournament vs baseline (50 games, 100ms, 25 opening pairs)
-python3 tournament_v1.9.py --engine1 ./vTest_engine --engine2 ./v2.2_engine \
+python3 tournament_v1.9.py --engine1 ./vTest_engine --engine2 ./v2.3_engine \
     --openings 25 --movetime 100 --seed 42 2>&1 | tail -8
 ```
 
 **Keep if**: perft = 4865609 AND tournament ≥ 48%. Revert immediately otherwise.
-**Baseline**: `engine/v2.2_engine` binary (copy before adding features: `cp vX.Y_engine vX.Y_baseline`)
+**Baseline**: `engine/v2.3_engine` binary (copy before adding features: `cp vX.Y_engine vX.Y_baseline`)
 
 ### Perft Reference Values
 | Position | Depth | Nodes |
@@ -76,8 +76,8 @@ python3 tournament_v1.9.py --engine1 ./vTest_engine --engine2 ./v2.2_engine \
 | Target | Source | Notes |
 |--------|--------|-------|
 | `vTest_engine` | `vTest_engine.c fathom.c` | Working test file — modify freely |
-| `v2.2_engine` | `v2.2_engine.c fathom.c` | Current deployed version |
-| `v2.2_tuner` | `v2.2_engine.c fathom.c` | `-DTUNER` |
+| `v2.3_engine` | `v2.3_engine.c fathom.c` | Current deployed version |
+| `v2.3_tuner` | `v2.3_engine.c fathom.c` | `-DTUNER` |
 | `vTest_tuner` | `vTest_engine.c` | `-DTUNER`, no fathom |
 
 Compile flags: `-O3 -march=native -fomit-frame-pointer -pthread`
@@ -190,6 +190,7 @@ Compile flags: `-O3 -march=native -fomit-frame-pointer -pthread`
 | v2.0 | Syzygy WDL probing (fathom), root TB probe, mate-in-X chat, improving flag | ~2225 |
 | v2.1 | IIR, razoring 450, SE margin 8×depth, double extension, phase-aware futility | ~2300 |
 | v2.2 | Six correctness fixes: OCB scaling (wn==0&&bn==0 guard), qsearch lazy eval guard removed, qsearch break→continue, TT replacement (no EXACT free-eviction), killer dedup (×2 sites) | ~2300 |
+| v2.3 | Opening book: c4 as white (58% win rate), extended black responses; explorer source masters→player, min_games 500→5. Tournament 51.0% vs v2.2 | ~2300 |
 
 ---
 
@@ -198,7 +199,7 @@ Compile flags: `-O3 -march=native -fomit-frame-pointer -pthread`
 ```bash
 # On server — bot goes DOWN during tuning (run_tuner.py stops lichess-bot)
 # Compile tuner
-make v2.2_tuner   # -DTUNER flag disables correction history and pondering
+make v2.3_tuner   # -DTUNER flag disables correction history and pondering
 
 # Dataset: ~/c_rewrite/dataset_pgn.txt (1M quiet positions, Lichess DB ≥2000 Elo ≥3min)
 # Script:  engine/run_tuner.py  (emails hourly MSE plot)
@@ -224,7 +225,7 @@ After tuning: verify `perft 5 = 4865609`, run tournament, update `tp[]` array co
 ssh root@178.156.243.29 "journalctl -u lichess-bot -n 50 --no-pager"
 
 # Quick engine benchmark (Kiwipete depth 12)
-echo -e "position fen r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq -\ngo depth 12" | ./v2.2_engine
+echo -e "position fen r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq -\ngo depth 12" | ./v2.3_engine
 
 # Git workflow
 git add engine/vX.Y_engine.c engine/Makefile
