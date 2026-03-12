@@ -3968,7 +3968,6 @@ int countermove[12][64];
 // Previous move tracking for countermove (piece that moved and its destination)
 __thread int prev_move_piece;
 __thread int prev_move_to;
-__thread int prev_was_capture;
 
 // Static eval history per ply for improving flag
 __thread int static_evals_by_ply[max_ply];
@@ -4499,7 +4498,6 @@ static inline int negamax(int alpha, int beta, int depth, int null_ok)
     // Save opponent's last move for countermove heuristic lookup/storage
     int cm_piece = prev_move_piece;
     int cm_to = prev_move_to;
-    int cm_was_cap = prev_was_capture;
 
     // v18: Singular extension — if the TT move is the only good move at this node, extend it.
     // Conditions: non-PV, depth>=8, have a TT move, not in check, not at root,
@@ -4540,7 +4538,7 @@ static inline int negamax(int alpha, int beta, int depth, int null_ok)
 
         if (make_move(tt_best_move, all_moves)) {
             legal_moves_count = 1;
-            int futile_tt = futile && legal_moves_count > 0 &&
+            int futile_tt = futile &&
                             !get_move_capture(tt_best_move) && !get_move_promoted(tt_best_move);
                 int tt_score;
             if (!futile_tt) {
@@ -5561,7 +5559,7 @@ void uci_loop()
         }
 
         if (strncmp(input, "uci", 3) == 0) {
-            printf("id name v25\n");
+            printf("id name v28\n");
             printf("id author tomberkley\n");
             printf("option name Threads type spin default 1 min 1 max %d\n", MAX_THREADS);
             printf("option name UCI_Ponder type check default false\n");

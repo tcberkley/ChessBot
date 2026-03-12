@@ -976,7 +976,10 @@ def get_opening_explorer_move(li: LICHESS_TYPE, board: chess.Board, game: model.
     time_left = msec(game.state[side])
     min_time = seconds(opening_explorer_cfg.min_time)
     source = opening_explorer_cfg.source
-    if not opening_explorer_cfg.enabled or time_left < min_time or source == "master" and board.uci_variant != "chess":
+    speed_fractions = {"bullet": 0.95, "blitz": 0.5, "rapid": 0.3, "classical": 0.0}
+    fraction = speed_fractions.get(game.speed, 0.3)
+    effective_min_time = max(min_time, game.clock_initial * fraction)
+    if not opening_explorer_cfg.enabled or time_left < effective_min_time or source == "master" and board.uci_variant != "chess":
         return None, {}
 
     move = None
@@ -994,7 +997,7 @@ def get_opening_explorer_move(li: LICHESS_TYPE, board: chess.Board, game: model.
                 player = game.username
             params = {"player": player, "fen": board.fen(), "moves": 100, "variant": variant,
                       "recentGames": 0, "color": "white" if side == "wtime" else "black"}
-            response = li.online_book_get("https://explorer.lichess.ovh/player", params, True)
+            response = li.online_book_get("https://explorer.lichess.ovh/player", params)
             comment = {"string": "lichess-bot-source:Lichess Opening Explorer (Player)"}
         else:
             params = {"fen": board.fen(), "moves": 100, "variant": variant, "topGames": 0, "recentGames": 0}

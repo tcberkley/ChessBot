@@ -168,6 +168,22 @@ Compile flags: `-O3 -march=native -fomit-frame-pointer -pthread`
 | Connected/chained pawn bonus | Bonus for pawns protecting each other (rank-indexed, 0→+44 range). We have isolated/doubled/backward but no chain bonus |
 | Backward pawns: open vs closed file | Currently flat penalty — split into separate open-file / closed-file penalties |
 | History aging | On each new search, divide history table by 16 to decay stale entries. Alternative to gravity; worth A/B testing |
+| **v2.3 search regression investigation** | v2.3 was only tested vs v2.2 (51%). Self-play shows v2.3 barely beats v2.1 (52.2%) and v2.2 is clearly weaker than v2.1 (35.4%). v2.3 inherits all 5 v2.2 changes — the TT replacement change (removed `\|\| flag == HASH_FLAG_EXACT`) is the prime suspect. Need formal 100-game tournament: `v2.3_engine vs v2.1_engine` at movetime 100ms to confirm whether v2.3's edge is engine or opening book. If opening book only, revert TT change in v2.4. |
+
+---
+
+## v2.2 Search Regression
+
+v2.2 introduced 5 changes over v2.1. Tournament confirmed −10 Elo vs v2.1 (48.5%, 100 games) and v2.2 was deleted. All 5 changes were inherited by v2.3.
+
+**The 5 changes:**
+1. **OCB guard** (`wn==0 && bn==0`) — correct, low impact
+2. **TT replacement** — removed `|| flag == HASH_FLAG_EXACT`. Prime suspect: prevents a fresh shallow EXACT entry from evicting a stale deep entry, possibly serving worse results during iterative deepening
+3. **Qsearch lazy eval guard removed** — correct fix
+4. **Qsearch `break` → `continue`** — correct fix (killers at 900k were triggering early exit)
+5. **Killer dedup** (×2 sites) — small correctness fix, neutral
+
+v2.3 was never tested directly vs v2.1. Its narrow self-play edge (52.2%) is likely from the opening book (c4), not search. The TT change should be the first thing reverted when investigating v2.4.
 
 ---
 

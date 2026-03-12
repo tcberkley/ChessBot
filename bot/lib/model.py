@@ -204,9 +204,9 @@ class Game:
 
     def is_abortable(self) -> bool:
         """Whether the game can be aborted."""
-        # Moves are separated by spaces. A game is abortable when less
-        # than two moves (one from each player) have been played.
-        return " " not in self.state["moves"]
+        # Only abort if neither player has moved yet. A single move from us
+        # (e.g. after a slow opening-explorer API call) should not trigger an abort.
+        return not self.state["moves"]
 
     def ping(self, abort_in: datetime.timedelta, terminate_in: datetime.timedelta, disconnect_in: datetime.timedelta) -> None:
         """
