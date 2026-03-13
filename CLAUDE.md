@@ -10,7 +10,7 @@ Do NOT read, write, or execute anything outside this tree without explicit user 
 - **Lichess bot**: `tombot1234` on Hetzner CPX11 (`178.156.243.29`, Ubuntu 24.04)
 - **Engine**: C (BBC magic bitboard), UCI, multi-threaded (Lazy SMP + pondering)
 - **Bridge**: Python `lichess-bot` in `bot/`
-- **Current deployed**: `v2.3_engine` (~2300 Elo)
+- **Current deployed**: `v2.4_engine` (~2300 Elo)
 - **Engine source**: `engine/` | **Fathom Syzygy lib**: `engine/fathom*.{h,c}` + `tbconfig.h` `tbchess.c` `stdendian.h`
 
 ---
@@ -157,6 +157,8 @@ Compile flags: `-O3 -march=native -fomit-frame-pointer -pthread`
 | SEE-weighted capture history | 44.0% | Winning SEE→bonus, losing SEE→malus; clear regression vs v2.2 |
 | Aspiration window time guard (0.7→0.5) | 45.0% | Guard already existed at 0.7; tightening to 0.5 hurts (bails too early) |
 | King virtual mobility (middlegame, 5cp/missing square) | 44.0% | (8−mob)×5 penalty in MG king safety; not discriminating enough vs v2.2 |
+| Connected/chained pawn bonus (rank-indexed 0→44) | 44.0% | 8-entry rank-indexed bonus for pawns defended by own pawn; clear regression vs v2.4 |
+| History aging (÷16 all history tables) | 50.0% | Divide history/capture/cont_hist by 16 each search instead of clearing; perfectly neutral vs v2.4 |
 
 ---
 
@@ -164,10 +166,10 @@ Compile flags: `-O3 -march=native -fomit-frame-pointer -pthread`
 
 | Feature | Notes |
 |---------|-------|
-| Pawn shield (rank-indexed, per-file) | Bonuses for pawns near castled king by rank/file; open-file-near-king penalties. Higher priority — likely explains losses to stronger engines |
+| ~~Pawn shield (rank-indexed, per-file)~~ | Implemented in v2.4 (49.0% vs v2.3). 5 tunable params at tp[781-785] |
 | Connected/chained pawn bonus | Bonus for pawns protecting each other (rank-indexed, 0→+44 range). We have isolated/doubled/backward but no chain bonus |
-| Backward pawns: open vs closed file | Currently flat penalty — split into separate open-file / closed-file penalties |
-| History aging | On each new search, divide history table by 16 to decay stale entries. Alternative to gravity; worth A/B testing |
+| ~~Backward pawns: open vs closed file~~ | Implemented in v2.4 (54.0%). TP_BACKWARD_PAWN=12 (closed), TP_BACKWARD_OPEN=30 (open) |
+| ~~History aging~~ | Tested in v2.4 session (50.0% — neutral). ÷16 all history tables instead of clearing |
 | **v2.3 search regression investigation** | v2.3 was only tested vs v2.2 (51%). Self-play shows v2.3 barely beats v2.1 (52.2%) and v2.2 is clearly weaker than v2.1 (35.4%). v2.3 inherits all 5 v2.2 changes — the TT replacement change (removed `\|\| flag == HASH_FLAG_EXACT`) is the prime suspect. Need formal 100-game tournament: `v2.3_engine vs v2.1_engine` at movetime 100ms to confirm whether v2.3's edge is engine or opening book. If opening book only, revert TT change in v2.4. |
 
 ---
@@ -207,6 +209,7 @@ v2.3 was never tested directly vs v2.1. Its narrow self-play edge (52.2%) is lik
 | v2.1 | IIR, razoring 450, SE margin 8×depth, double extension, phase-aware futility | ~2300 |
 | v2.2 | Six correctness fixes: OCB scaling (wn==0&&bn==0 guard), qsearch lazy eval guard removed, qsearch break→continue, TT replacement (no EXACT free-eviction), killer dedup (×2 sites) | ~2300 |
 | v2.3 | Opening book: c4 as white (58% win rate), extended black responses; explorer source masters→player, min_games 500→5. Tournament 51.0% vs v2.2 | ~2300 |
+| v2.4 | Rank-indexed pawn shield (5 params: rank1/2/3 bonus, missing penalty, king-file bonus) + backward pawn open/closed file split (12cp closed, 30cp open). Tournament: shield 49.0% vs v2.3, backward split 54.0% vs shield | ~2300 |
 
 ---
 

@@ -77,6 +77,12 @@ v2.3_engine: v2.3_engine.c fathom.c
 v2.3_tuner: v2.3_engine.c fathom.c
 	$(CC) $(V14FLAGS) -DTUNER -o v2.3_tuner v2.3_engine.c fathom.c -lm
 
+v2.4_engine: v2.4_engine.c fathom.c
+	$(CC) $(V14FLAGS) -pthread -o v2.4_engine v2.4_engine.c fathom.c $(LDFLAGS)
+
+v2.4_tuner: v2.4_engine.c fathom.c
+	$(CC) $(V14FLAGS) -DTUNER -o v2.4_tuner v2.4_engine.c fathom.c -lm
+
 vTest_engine: vTest_engine.c fathom.c
 	$(CC) $(V14FLAGS) -pthread -o vTest_engine vTest_engine.c fathom.c $(LDFLAGS)
 
