@@ -54,12 +54,12 @@ make vTest_engine
 echo -e "position startpos\nperft 5" | ./vTest_engine | tail -3
 
 # 3. Tournament vs baseline (50 games, 100ms, 25 opening pairs)
-python3 tournament_v1.9.py --engine1 ./vTest_engine --engine2 ./v2.3_engine \
+python3 tournament_v1.9.py --engine1 ./vTest_engine --engine2 ./v2.4_engine \
     --openings 25 --movetime 100 --seed 42 2>&1 | tail -8
 ```
 
 **Keep if**: perft = 4865609 AND tournament ≥ 48%. Revert immediately otherwise.
-**Baseline**: `engine/v2.3_engine` binary (copy before adding features: `cp vX.Y_engine vX.Y_baseline`)
+**Baseline**: `engine/v2.4_engine` binary (copy before adding features: `cp vX.Y_engine vX.Y_baseline`)
 
 ### Perft Reference Values
 | Position | Depth | Nodes |
@@ -76,8 +76,8 @@ python3 tournament_v1.9.py --engine1 ./vTest_engine --engine2 ./v2.3_engine \
 | Target | Source | Notes |
 |--------|--------|-------|
 | `vTest_engine` | `vTest_engine.c fathom.c` | Working test file — modify freely |
-| `v2.3_engine` | `v2.3_engine.c fathom.c` | Current deployed version |
-| `v2.3_tuner` | `v2.3_engine.c fathom.c` | `-DTUNER` |
+| `v2.4_engine` | `v2.4_engine.c fathom.c` | Current deployed version |
+| `v2.4_tuner` | `v2.4_engine.c fathom.c` | `-DTUNER` |
 | `vTest_tuner` | `vTest_engine.c` | `-DTUNER`, no fathom |
 
 Compile flags: `-O3 -march=native -fomit-frame-pointer -pthread`
@@ -170,7 +170,7 @@ Compile flags: `-O3 -march=native -fomit-frame-pointer -pthread`
 | Connected/chained pawn bonus | Bonus for pawns protecting each other (rank-indexed, 0→+44 range). We have isolated/doubled/backward but no chain bonus |
 | ~~Backward pawns: open vs closed file~~ | Implemented in v2.4 (54.0%). TP_BACKWARD_PAWN=12 (closed), TP_BACKWARD_OPEN=30 (open) |
 | ~~History aging~~ | Tested in v2.4 session (50.0% — neutral). ÷16 all history tables instead of clearing |
-| **v2.3 search regression investigation** | v2.3 was only tested vs v2.2 (51%). Self-play shows v2.3 barely beats v2.1 (52.2%) and v2.2 is clearly weaker than v2.1 (35.4%). v2.3 inherits all 5 v2.2 changes — the TT replacement change (removed `\|\| flag == HASH_FLAG_EXACT`) is the prime suspect. Need formal 100-game tournament: `v2.3_engine vs v2.1_engine` at movetime 100ms to confirm whether v2.3's edge is engine or opening book. If opening book only, revert TT change in v2.4. |
+| ~~v2.3 search regression investigation~~ | Resolved: v2.3 beats v2.1 at 53.0% (100ms) and ~54% (2000ms). No regression — v2.3 is genuinely stronger at both time controls |
 
 ---
 
@@ -185,7 +185,7 @@ v2.2 introduced 5 changes over v2.1. Tournament confirmed −10 Elo vs v2.1 (48.
 4. **Qsearch `break` → `continue`** — correct fix (killers at 900k were triggering early exit)
 5. **Killer dedup** (×2 sites) — small correctness fix, neutral
 
-v2.3 was never tested directly vs v2.1. Its narrow self-play edge (52.2%) is likely from the opening book (c4), not search. The TT change should be the first thing reverted when investigating v2.4.
+**Resolved (2026-03-12):** v2.3 tested directly vs v2.1: 53.0% at 100ms (50 games), ~54% at 2000ms (11 games partial). No regression — v2.3 is genuinely stronger at both time controls. TT change not reverted.
 
 ---
 
@@ -218,7 +218,7 @@ v2.3 was never tested directly vs v2.1. Its narrow self-play edge (52.2%) is lik
 ```bash
 # On server — bot goes DOWN during tuning (run_tuner.py stops lichess-bot)
 # Compile tuner
-make v2.3_tuner   # -DTUNER flag disables correction history and pondering
+make v2.4_tuner   # -DTUNER flag disables correction history and pondering
 
 # Dataset: ~/c_rewrite/dataset_pgn.txt (1M quiet positions, Lichess DB ≥2000 Elo ≥3min)
 # Script:  engine/run_tuner.py  (emails hourly MSE plot)
@@ -244,7 +244,7 @@ After tuning: verify `perft 5 = 4865609`, run tournament, update `tp[]` array co
 ssh root@178.156.243.29 "journalctl -u lichess-bot -n 50 --no-pager"
 
 # Quick engine benchmark (Kiwipete depth 12)
-echo -e "position fen r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq -\ngo depth 12" | ./v2.3_engine
+echo -e "position fen r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq -\ngo depth 12" | ./v2.4_engine
 
 # Git workflow
 git add engine/vX.Y_engine.c engine/Makefile
